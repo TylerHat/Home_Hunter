@@ -1,0 +1,27 @@
+# Secrets / local env
+.env
+
+# Local database
+*.db
+*.sqlite
+*.sqlite3
+
+# Scraper diagnostics (--debug)
+debug/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# AI / Claude Code local config + instructions (keep out of the public repo)
+.claude/
+CLAUDE.md

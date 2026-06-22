@@ -1,0 +1,84 @@
+{
+  "cat1": {
+    "searchResults": {
+      "listResults": [
+        {
+          "zpid": "12345678",
+          "price": "$450,000",
+          "unformattedPrice": 450000,
+          "addressStreet": "123 Main St",
+          "addressCity": "Springfield",
+          "addressState": "IL",
+          "addressZipcode": "62704",
+          "beds": 3,
+          "baths": 2,
+          "area": 1800,
+          "latLong": { "latitude": 39.7817, "longitude": -89.6501 },
+          "statusType": "FOR_SALE",
+          "detailUrl": "/homedetails/123-Main-St-Springfield-IL-62704/12345678_zpid/",
+          "hdpData": {
+            "homeInfo": {
+              "zpid": 12345678,
+              "streetAddress": "123 Main St",
+              "city": "Springfield",
+              "state": "IL",
+              "zipcode": "62704",
+              "price": 450000,
+              "bedrooms": 3,
+              "bathrooms": 2,
+              "livingArea": 1800,
+              "lotAreaValue": 0.25,
+              "lotAreaUnit": "acres",
+              "homeType": "SINGLE_FAMILY",
+              "homeStatus": "FOR_SALE",
+              "latitude": 39.7817,
+              "longitude": -89.6501
+            }
+          }
+        },
+        {
+          "zpid": "87654321",
+          "price": "$289,900",
+          "unformattedPrice": 289900,
+          "addressStreet": "456 Oak Ave",
+          "addressCity": "Springfield",
+          "addressState": "IL",
+          "addressZipcode": "62704",
+          "beds": 2,
+          "baths": 1,
+          "area": 1100,
+          "latLong": { "latitude": 39.79, "longitude": -89.66 },
+          "statusType": "FOR_SALE",
+          "detailUrl": "/homedetails/456-Oak-Ave-Springfield-IL-62704/87654321_zpid/",
+          "hdpData": {
+            "homeInfo": {
+              "zpid": 87654321,
+              "streetAddress": "456 Oak Ave",
+              "city": "Springfield",
+              "state": "IL",
+              "zipcode": "62704",
+              "price": 289900,
+              "bedrooms": 2,
+              "bathrooms": 1,
+              "livingArea": 1100,
+              "homeType": "CONDO",
+              "homeStatus": "FOR_SALE",
+              "latitude": 39.79,
+              "longitude": -89.66
+            }
+          }
+        }
+      ],
+      "mapResults": [
+        {
+          "zpid": "12345678",
+          "price": "$450,000",
+          "latLong": { "latitude": 39.7817, "longitude": -89.6501 }
+        }
+      ]
+    }
+  },
+  "categoryTotals": {
+    "cat1": { "totalResultCount": 2 }
+  }
+}

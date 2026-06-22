@@ -1,0 +1,37 @@
+name: Daily NYC rental scrape
+
+# Runs on GitHub-hosted runners (Microsoft IPs) — never your home IP.
+# Craigslist needs no browser, so this job is fast and light.
+on:
+  schedule:
+    - cron: "17 11 * * *"   # daily at 11:17 UTC (~early morning US). Odd minute avoids load spikes.
+  workflow_dispatch:          # allow manual runs from the Actions tab
+
+# Avoid overlapping runs if a previous one is still going.
+concurrency:
+  group: rental-scrape
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run scrape
+        env:
+          # Configure this in: repo Settings -> Secrets and variables -> Actions.
+          # A Neon Postgres URL, e.g. postgresql+psycopg://USER:PASS@HOST/neondb?sslmode=require
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python scripts/run_scrape.py

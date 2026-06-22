@@ -1,0 +1,44 @@
+# Home Hunter — NYC apartment-rental scrape configuration (Craigslist)
+#
+# Targets NYC apartment rentals. Edit `areas` to choose boroughs and `filters`
+# to bound rent/beds/pets. Craigslist has light bot protection, so this runs
+# reliably on free servers without a real browser.
+
+# Craigslist site subdomain (newyork.craigslist.org -> "newyork").
+city: newyork
+
+# Craigslist NYC sub-region codes (boroughs) to scrape.
+#   mnh = Manhattan   brk = Brooklyn   que = Queens
+#   brx = Bronx       stn = Staten Island
+areas:
+  - mnh
+  - brk
+  - que
+  - brx
+  - stn
+
+# Rental filters applied to the Craigslist search.
+filters:
+  min_rent: null      # null = no bound (monthly USD)
+  max_rent: null
+  min_beds: null
+  max_beds: null
+  cats_ok: null       # true = only cat-friendly listings
+  dogs_ok: null       # true = only dog-friendly listings
+  max_pages: 3        # search pages per borough (~120 listings/page)
+
+# Data source. "craigslist" is the active backend; "zillow" is legacy code kept
+# under src/home_hunter/scraper/zillow/ (not wired into the default pipeline).
+source: craigslist
+
+# Open each listing's detail page to capture square footage + amenities
+# (laundry, parking, pets, no-fee). false = faster, but only search-page fields.
+detail_fetch: true
+
+# Respectful-scraping knobs. Craigslist tolerates modest, paced access.
+rate_limit:
+  min_delay_seconds: 2       # random delay floor between requests
+  max_delay_seconds: 5       # random delay ceiling
+  max_retries: 3             # retries on 403/429/5xx before skipping
+  backoff_base_seconds: 4    # exponential backoff base
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"

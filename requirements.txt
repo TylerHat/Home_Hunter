@@ -1,0 +1,25 @@
+# --- Scraping (HTTP only — Craigslist needs no headless browser) ---
+httpx>=0.27.0             # HTTP client for the Craigslist scraper
+
+# --- Data modeling / validation ---
+pydantic>=2.7.0
+
+# --- Database ---
+SQLAlchemy>=2.0.30
+psycopg[binary]>=3.1.0    # PostgreSQL driver (Neon). SQLite works with no extra driver.
+
+# --- Query API (future-UI seam) ---
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+
+# --- Config / misc ---
+PyYAML>=6.0
+python-dotenv>=1.0.0
+
+# --- Dev / test ---
+pytest>=8.2.0
+ruff>=0.4.0
+
+# --- Legacy Zillow backend (optional; only if reviving src/.../scraper/zillow/) ---
+# playwright>=1.44.0
+# curl_cffi>=0.7.0

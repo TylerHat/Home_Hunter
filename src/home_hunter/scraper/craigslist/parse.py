@@ -1,0 +1,244 @@
+"""Parse Craigslist NYC rental search + detail pages into clean models.
+
+Two stages:
+  * ``parse_search_results(html)`` -> list[RentalSummary] from a search page.
+    Cheap fields only: pid, url, title, price, neighborhood.
+  * ``parse_detail(html, summary)`` -> RentalListing with square footage and
+    amenities. Craigslist encodes structured attributes as query-param links
+    (e.g. ``...?laundry=2`` -> "laundry in bldg"), which we read by key + text.
+
+Extraction is regex-based and defensive: missing fields degrade to ``None`` /
+``False`` rather than raising, because Craigslist markup shifts over time.
+"""
+
+from __future__ import annotations
+
+import html
+import re
+from datetime import datetime
+from typing import Any
+
+from pydantic import BaseModel, field_validator
+
+# Maps a Craigslist attr query-param key to (field_name, is_flag).
+# is_flag=True -> presence means True; is_flag=False -> store the link text.
+_ATTR_KEYS: dict[str, tuple[str, bool]] = {
+    "laundry": ("laundry", False),
+    "parking": ("parking", False),
+    "housing_type": ("housing_type", False),
+    "rent_period": ("rent_period", False),
+    "pets_cat": ("cats_ok", True),
+    "pets_dog": ("dogs_ok", True),
+    "is_furnished": ("furnished", True),
+    "no_smoking": ("no_smoking", True),
+    "wheelchaccess": ("wheelchair_accessible", True),
+    "air_conditioning": ("air_conditioning", True),
+    "ev_charging": ("ev_charging", True),
+}
+
+_PID_RE = re.compile(r"/(\d+)\.html")
+_ROW_RE = re.compile(r'<li class="cl-static-search-result".*?</li>', re.S)
+_ATTR_LINK_RE = re.compile(
+    r'<a href="[^"]*?/search/[a-z]{2,4}\?([a-z_]+)=[^"]*">(.*?)</a>', re.S
+)
+_BEDS_RE = re.compile(r"(\d+(?:\.\d+)?)\s*br", re.I)
+_BATHS_RE = re.compile(r"(\d+(?:\.\d+)?)\s*ba\b", re.I)
+_SQFT_RE = re.compile(r"([\d,]+)\s*ft(?:<sup>2</sup>|&sup2;|²|2)", re.I)
+_NOFEE_RE = re.compile(r"no[\s\-]?fee", re.I)
+
+
+class RentalSummary(BaseModel):
+    """Cheap fields pulled from one search-results row."""
+
+    pid: str
+    url: str
+    title: str | None = None
+    price: int | None = None
+    neighborhood: str | None = None
+
+    @field_validator("pid", mode="before")
+    @classmethod
+    def _coerce_pid(cls, v: Any) -> str:
+        return str(v).strip()
+
+
+class RentalListing(BaseModel):
+    """One normalized NYC rental listing (search + detail merged)."""
+
+    pid: str
+    source: str = "craigslist"
+    url: str | None = None
+    title: str | None = None
+    neighborhood: str | None = None
+    borough: str | None = None
+
+    price: int | None = None
+    beds: float | None = None
+    baths: float | None = None
+    sqft: int | None = None
+    housing_type: str | None = None
+
+    laundry: str | None = None
+    parking: str | None = None
+    cats_ok: bool = False
+    dogs_ok: bool = False
+    furnished: bool = False
+    no_smoking: bool = False
+    wheelchair_accessible: bool = False
+    air_conditioning: bool = False
+    ev_charging: bool = False
+    no_fee: bool = False
+    rent_period: str | None = None
+    amenities: list[str] = []
+
+    latitude: float | None = None
+    longitude: float | None = None
+
+    posted_at: datetime | None = None
+    updated_at: datetime | None = None
+    raw: dict[str, Any] = {}
+
+
+def _clean(text: str | None) -> str | None:
+    if text is None:
+        return None
+    text = re.sub(r"<[^>]+>", "", text)
+    text = html.unescape(text).strip()
+    return text or None
+
+
+def _price_to_int(text: str | None) -> int | None:
+    if not text:
+        return None
+    digits = re.sub(r"[^\d]", "", text)
+    return int(digits) if digits else None
+
+
+def _first(pattern: re.Pattern[str], text: str, group: int = 1) -> str | None:
+    m = pattern.search(text)
+    return m.group(group) if m else None
+
+
+def _parse_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _pid_from_url(url: str) -> str | None:
+    m = _PID_RE.search(url)
+    return m.group(1) if m else None
+
+
+def parse_search_results(page_html: str) -> list[RentalSummary]:
+    """Extract the listing summaries embedded in a Craigslist search page."""
+    summaries: dict[str, RentalSummary] = {}
+    for row in _ROW_RE.findall(page_html):
+        href = _first(re.compile(r'<a href="([^"]+)"'), row)
+        if not href:
+            continue
+        pid = _pid_from_url(href)
+        if pid is None or pid in summaries:
+            continue
+        summaries[pid] = RentalSummary(
+            pid=pid,
+            url=html.unescape(href),
+            title=_clean(_first(re.compile(r'<div class="title">(.*?)</div>', re.S), row)),
+            price=_price_to_int(
+                _first(re.compile(r'<div class="price">(.*?)</div>', re.S), row)
+            ),
+            neighborhood=_clean(
+                _first(re.compile(r'<div class="location">(.*?)</div>', re.S), row)
+            ),
+        )
+    return list(summaries.values())
+
+
+def _parse_beds_baths(detail_html: str) -> tuple[float | None, float | None]:
+    """Beds/baths from the `<span class="attr important">1BR / 1Ba</span>` block."""
+    m = re.search(r'<span class="attr important">(.*?)</span>', detail_html, re.S)
+    text = _clean(m.group(1)) if m else None
+    if not text:
+        return None, None
+    beds: float | None = None
+    if re.search(r"\bstudio\b", text, re.I):
+        beds = 0.0
+    else:
+        b = _BEDS_RE.search(text)
+        beds = float(b.group(1)) if b else None
+    ba = _BATHS_RE.search(text)
+    baths = float(ba.group(1)) if ba else None
+    return beds, baths
+
+
+def parse_detail(
+    detail_html: str,
+    summary: RentalSummary,
+    *,
+    borough: str | None = None,
+) -> RentalListing:
+    """Merge a search summary with structured fields from its detail page."""
+    listing = RentalListing(
+        pid=summary.pid,
+        url=summary.url,
+        title=summary.title,
+        neighborhood=summary.neighborhood,
+        borough=borough,
+        price=summary.price,
+    )
+
+    title = _clean(_first(re.compile(r'<span id="titletextonly">(.*?)</span>', re.S), detail_html))
+    if title:
+        listing.title = title
+
+    price = _price_to_int(_first(re.compile(r'<span class="price">(.*?)</span>', re.S), detail_html))
+    if price is not None:
+        listing.price = price
+
+    listing.beds, listing.baths = _parse_beds_baths(detail_html)
+
+    sqft = _first(_SQFT_RE, detail_html)
+    if sqft:
+        listing.sqft = _price_to_int(sqft)
+
+    # Structured attributes encoded as query-param links.
+    amenities: list[str] = []
+    for key, raw_text in _ATTR_LINK_RE.findall(detail_html):
+        label = _clean(raw_text)
+        if not label:
+            continue
+        mapping = _ATTR_KEYS.get(key)
+        if mapping:
+            field_name, is_flag = mapping
+            setattr(listing, field_name, True if is_flag else label)
+        amenities.append(label)
+    listing.amenities = amenities
+
+    # Lat/long from the map div.
+    latlong = re.search(
+        r'<div id="map"[^>]*data-latitude="([-\d.]+)"[^>]*data-longitude="([-\d.]+)"',
+        detail_html,
+    )
+    if latlong:
+        listing.latitude = float(latlong.group(1))
+        listing.longitude = float(latlong.group(2))
+
+    # Posted / updated timestamps.
+    times = re.findall(r'<time[^>]*datetime="([^"]+)"', detail_html)
+    if times:
+        listing.posted_at = _parse_dt(times[0])
+        listing.updated_at = _parse_dt(times[-1])
+
+    # No-fee is NYC-specific and not a structured Craigslist attr; detect it in
+    # the title or body text.
+    body = _first(re.compile(r'<section id="postingbody">(.*?)</section>', re.S), detail_html) or ""
+    listing.no_fee = bool(_NOFEE_RE.search((listing.title or "") + " " + body))
+
+    listing.raw = {
+        "summary": summary.model_dump(),
+        "attrs": amenities,
+    }
+    return listing

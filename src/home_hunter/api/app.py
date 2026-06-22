@@ -1,0 +1,131 @@
+"""Minimal read-only FastAPI over the scraped NYC rentals.
+
+This is the backend seam the future search UI will consume. Run it with:
+    uvicorn home_hunter.api.app:app --reload --app-dir src
+Then browse the auto docs at http://127.0.0.1:8000/docs
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Annotated
+
+from fastapi import Depends, FastAPI, HTTPException, Query
+from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from ..config import load_config
+from ..db import get_sessionmaker, init_db, make_engine
+from ..models import Rental, RentHistory
+
+app = FastAPI(title="Home Hunter — NYC Rentals API", version="0.2.0")
+
+_engine = make_engine(load_config())
+init_db(_engine)
+_Session = get_sessionmaker(_engine)
+
+
+def get_session() -> Session:
+    with _Session() as session:
+        yield session
+
+
+class RentalOut(BaseModel):
+    pid: str
+    source: str
+    title: str | None
+    neighborhood: str | None
+    borough: str | None
+    price: int | None
+    beds: float | None
+    baths: float | None
+    sqft: int | None
+    housing_type: str | None
+    laundry: str | None
+    parking: str | None
+    cats_ok: bool
+    dogs_ok: bool
+    furnished: bool
+    no_fee: bool
+    amenities: list
+    latitude: float | None
+    longitude: float | None
+    url: str | None
+    posted_at: datetime | None
+    last_seen: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class RentHistoryOut(BaseModel):
+    price: int
+    observed_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/rentals", response_model=list[RentalOut])
+def list_rentals(
+    session: Annotated[Session, Depends(get_session)],
+    borough: str | None = None,
+    min_rent: int | None = None,
+    max_rent: int | None = None,
+    min_beds: float | None = None,
+    max_beds: float | None = None,
+    min_sqft: int | None = None,
+    housing_type: str | None = None,
+    cats_ok: bool | None = None,
+    dogs_ok: bool | None = None,
+    no_fee: bool | None = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> list[Rental]:
+    stmt = select(Rental)
+    if borough is not None:
+        stmt = stmt.where(Rental.borough == borough)
+    if min_rent is not None:
+        stmt = stmt.where(Rental.price >= min_rent)
+    if max_rent is not None:
+        stmt = stmt.where(Rental.price <= max_rent)
+    if min_beds is not None:
+        stmt = stmt.where(Rental.beds >= min_beds)
+    if max_beds is not None:
+        stmt = stmt.where(Rental.beds <= max_beds)
+    if min_sqft is not None:
+        stmt = stmt.where(Rental.sqft >= min_sqft)
+    if housing_type is not None:
+        stmt = stmt.where(Rental.housing_type == housing_type)
+    if cats_ok is not None:
+        stmt = stmt.where(Rental.cats_ok == cats_ok)
+    if dogs_ok is not None:
+        stmt = stmt.where(Rental.dogs_ok == dogs_ok)
+    if no_fee is not None:
+        stmt = stmt.where(Rental.no_fee == no_fee)
+    stmt = stmt.order_by(Rental.price.asc().nulls_last()).limit(limit).offset(offset)
+    return list(session.scalars(stmt).all())
+
+
+@app.get("/rentals/{pid}", response_model=RentalOut)
+def get_rental(pid: str, session: Annotated[Session, Depends(get_session)]) -> Rental:
+    rental = session.get(Rental, pid)
+    if rental is None:
+        raise HTTPException(status_code=404, detail="rental not found")
+    return rental
+
+
+@app.get("/rentals/{pid}/rent-history", response_model=list[RentHistoryOut])
+def get_rent_history(
+    pid: str, session: Annotated[Session, Depends(get_session)]
+) -> list[RentHistory]:
+    stmt = (
+        select(RentHistory)
+        .where(RentHistory.pid == pid)
+        .order_by(RentHistory.observed_at.asc())
+    )
+    return list(session.scalars(stmt).all())
