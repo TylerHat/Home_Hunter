@@ -1,10 +1,11 @@
 # Home Hunter — NYC rental tracker
 
 Scrapes **NYC apartment rentals** from Craigslist into a structured, queryable
-database, refreshed daily — **without using your home IP** and **100% free**.
-Captures rent, beds/baths, **square footage**, and **amenities** (laundry,
-parking, pets, no-fee), plus neighborhood, geolocation, and a rent-history trend.
-Backend + database + read API (the search/filter UI is a later phase).
+database, run **locally on demand** and **100% free** — no accounts, no paid
+services. Captures rent, beds/baths, **square footage**, and **amenities**
+(laundry, parking, pets, no-fee), plus neighborhood, geolocation, and a
+rent-history trend. Backend + database + read API (the search/filter UI is a
+later phase). An optional manual cloud mode can run it off your home IP.
 
 > **Why Craigslist?** It has little bot detection, so the scraper needs **no
 > headless browser** — plain HTTP runs reliably on free CI runners. Zillow and
@@ -17,14 +18,14 @@ Backend + database + read API (the search/filter UI is a later phase).
 
 | Constraint | How |
 |---|---|
-| Don't use my IP | The daily job runs on **GitHub Actions** (Microsoft-hosted runners), never your machine. |
-| 100% free | GitHub Actions free minutes + **Neon** Postgres free tier (or local SQLite) + open-source libs. No paid proxies/APIs. |
+| 100% free | Local **SQLite** + open-source libs. No paid proxies, APIs, or databases. |
 | Reliable | Craigslist needs no browser — just polite, paced HTTP with retries + exponential backoff. |
+| Run off my IP (optional) | A manual GitHub Actions workflow can run the scrape on Microsoft-hosted runners. Local on-demand runs use your own IP, which is fine for Craigslist's light protection at modest volume. |
 
 ## Architecture
 
 ```
-GitHub Actions (daily cron)
+Local CLI, on demand   (optional: manual GitHub Actions)
    └─ scripts/run_scrape.py
         └─ home_hunter.pipeline.run()
              ├─ scraper.build_client()              # CraigslistClient (HTTP)
@@ -84,7 +85,7 @@ All settings live in [config.yaml](config.yaml):
 - **`rent_history`** — a row is appended only when a listing's rent changes, so the
   DB becomes a rent-trend analysis asset over time.
 
-Daily runs upsert on `pid`: update existing, insert new, append rent history on change.
+Each run upserts on `pid`: update existing, insert new, append rent history on change.
 
 ## Query API
 
@@ -98,17 +99,22 @@ Daily runs upsert on `pid`: update existing, insert new, append rent history on 
 
 This is the contract the future search UI will call.
 
-## Free production setup (daily, off your IP)
+## Optional: run on GitHub instead of locally
+
+Not required — the project runs fine locally. This is only if you want scrapes to
+run off your home IP on GitHub's infrastructure. The workflow is **manual-only**
+(no schedule) and needs a persistent database to keep its results:
 
 1. **Create a free Neon Postgres database** at <https://neon.tech>. Copy its
    connection string and convert the driver prefix to:
    `postgresql+psycopg://USER:PASSWORD@HOST/neondb?sslmode=require`
-2. **Push this repo to GitHub.**
-3. In the repo: **Settings → Secrets and variables → Actions → New repository
+2. In the repo: **Settings → Secrets and variables → Actions → New repository
    secret**, name `DATABASE_URL`, value = the Neon URL above.
-4. The workflow in [.github/workflows/scrape.yml](.github/workflows/scrape.yml)
-   runs daily. Trigger it manually first: **Actions → Daily NYC rental scrape →
-   Run workflow**, and watch the logs.
+3. Run it on demand: **Actions → NYC rental scrape (manual) → Run workflow**.
+
+Without a `DATABASE_URL` secret, a cloud run writes to a throwaway SQLite file
+that is discarded when the runner stops — so the secret is what makes cloud data
+persist.
 
 ## Tests
 

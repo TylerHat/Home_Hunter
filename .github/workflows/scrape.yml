@@ -1,13 +1,16 @@
-name: Daily NYC rental scrape
+name: NYC rental scrape (manual)
 
-# Runs on GitHub-hosted runners (Microsoft IPs) — never your home IP.
-# Craigslist needs no browser, so this job is fast and light.
+# OFF by default. This project is meant to run locally on demand; this workflow
+# exists only as an OPTIONAL way to run a scrape on GitHub's infrastructure
+# (off your home IP). There is no schedule — it runs only when you click
+# "Run workflow" in the Actions tab.
+#
+# It needs a DATABASE_URL secret pointing at a persistent database (e.g. Neon
+# Postgres) to be useful; without one, results go to a throwaway SQLite file
+# that is discarded when the runner is destroyed.
 on:
-  schedule:
-    - cron: "17 11 * * *"   # daily at 11:17 UTC (~early morning US). Odd minute avoids load spikes.
-  workflow_dispatch:          # allow manual runs from the Actions tab
+  workflow_dispatch:   # manual trigger only
 
-# Avoid overlapping runs if a previous one is still going.
 concurrency:
   group: rental-scrape
   cancel-in-progress: false
@@ -31,7 +34,7 @@ jobs:
 
       - name: Run scrape
         env:
-          # Configure this in: repo Settings -> Secrets and variables -> Actions.
+          # Optional: set in repo Settings -> Secrets and variables -> Actions.
           # A Neon Postgres URL, e.g. postgresql+psycopg://USER:PASS@HOST/neondb?sslmode=require
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: python scripts/run_scrape.py
