@@ -95,6 +95,58 @@
   tbody td.titlecell a { color: var(--text); text-decoration: none; }
   tbody td.titlecell a:hover { color: var(--accent); }
   tbody td.nowrap { white-space: nowrap; }
+
+  /* --- advanced neighborhood selection --- */
+  .nbhd-cell { display: flex; flex-direction: column; gap: 5px; justify-content: flex-end; grid-column: span 2; }
+  .nbhd-cell .cap { font-size: 12px; color: var(--muted); }
+  .nbhd-cell button { white-space: nowrap; }
+  .nbhdchips { display: flex; flex-wrap: wrap; gap: 6px; margin: -6px 2px 16px; }
+  .nbhdchips:empty { display: none; }
+  .nbhdchips .nchip {
+    display: inline-flex; align-items: center; gap: 4px; font-size: 12px;
+    background: var(--chip); color: #cdd9e8; border-radius: 999px; padding: 4px 6px 4px 11px;
+  }
+  .nbhdchips .nchip button {
+    background: transparent; color: var(--muted); border: 0; padding: 0 2px;
+    font-size: 13px; line-height: 1; cursor: pointer; font-weight: 700;
+  }
+  .nbhdchips .nchip button:hover { color: var(--text); }
+
+  .modal[hidden] { display: none; }
+  .modal {
+    position: fixed; inset: 0; z-index: 50; background: rgba(4,8,12,.72);
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+  }
+  .modal-card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    width: min(980px, 96vw); height: min(86vh, 840px); display: flex; flex-direction: column;
+    overflow: hidden; box-shadow: 0 18px 60px rgba(0,0,0,.5);
+  }
+  .modal-head {
+    display: flex; align-items: center; gap: 10px; padding: 12px 14px;
+    border-bottom: 1px solid var(--line); flex-wrap: wrap;
+  }
+  .modal-head strong { font-size: 15px; }
+  .modal-head .spacer { flex: 1; }
+  .modal-head input {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 10px; font-size: 14px; min-width: 180px;
+  }
+  .modal-body { position: relative; flex: 1; background: #0b0f14; min-height: 0; }
+  #nbhdMap { width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+  #nbhdMap.panning { cursor: grabbing; }
+  #nbhdMap path {
+    stroke: #0b0f14; stroke-width: .6; cursor: pointer; vector-effect: non-scaling-stroke;
+    transition: opacity .1s;
+  }
+  #nbhdMap path:hover { stroke: var(--text); stroke-width: 1.2; }
+  #nbhdMap path.sel { stroke: var(--accent2); stroke-width: 1.6; }
+  .maploading {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: var(--muted); font-size: 14px;
+  }
+  .maploading[hidden] { display: none; }
+  .modal-foot { padding: 9px 14px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
 </style>
 </head>
 <body>
@@ -112,6 +164,10 @@
         <option>Bronx</option><option>Staten Island</option>
       </select>
     </label>
+    <div class="nbhd-cell">
+      <span class="cap">Neighborhoods</span>
+      <button class="ghost" id="openMap" type="button">🗺️ Advanced Neighborhood Selection</button>
+    </div>
     <label>Min rent ($)<input type="number" name="min_rent" min="0" step="100" placeholder="0" /></label>
     <label>Max rent ($)<input type="number" name="max_rent" min="0" step="100" placeholder="any" /></label>
     <label>Min beds<input type="number" name="min_beds" min="0" step="1" placeholder="any" /></label>
@@ -126,6 +182,8 @@
       <button class="ghost" id="reset" type="button">Reset</button>
     </div>
   </form>
+
+  <div class="nbhdchips" id="nbhdChips"></div>
 
   <div class="viewbar">
     <div class="count" id="count"></div>
@@ -143,6 +201,26 @@
   </div>
   <div class="more"><button class="ghost" id="loadmore" style="display:none">Load more</button></div>
 </main>
+
+<div class="modal" id="mapModal" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <strong>Select neighborhoods</strong>
+      <input id="nbhdSearch" type="search" placeholder="Search neighborhood…" />
+      <span class="muted" id="nbhdSelCount"></span>
+      <span class="spacer"></span>
+      <button class="ghost" id="nbhdReset" type="button">Reset view</button>
+      <button class="ghost" id="nbhdClear" type="button">Clear</button>
+      <button id="nbhdApply" type="button">Apply</button>
+      <button class="ghost" id="nbhdClose" type="button">✕ Close</button>
+    </div>
+    <div class="modal-body">
+      <svg id="nbhdMap" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg"></svg>
+      <div class="maploading" id="mapLoading">Loading map…</div>
+    </div>
+    <div class="modal-foot">Click neighborhoods to toggle · scroll to zoom · drag to pan · shading shows how many listings each has.</div>
+  </div>
+</div>
 
 <script>
 const PAGE = 60;
@@ -171,6 +249,7 @@ function query(extra) {
     if (el.type === "checkbox") { if (el.checked) p.set(el.name, "true"); }
     else if (el.value !== "") p.set(el.name, el.value);
   }
+  for (const n of selected) p.append("neighborhood", n);  // map selection (repeatable)
   p.set("limit", PAGE);
   p.set("offset", extra?.offset ?? 0);
   return p.toString();
@@ -179,7 +258,7 @@ function query(extra) {
 function card(r) {
   const meta = [beds(r.beds), r.baths != null ? r.baths + " ba" : null,
                 r.sqft != null ? fmt(r.sqft) + " ft²" : null,
-                [r.neighborhood, r.borough].filter(Boolean).join(", ") || null]
+                [r.neighborhood_key || r.neighborhood, r.borough].filter(Boolean).join(", ") || null]
                .filter(Boolean).join(" · ");
   const chips = [];
   if (r.no_fee) chips.push(`<span class="chip nofee">no fee</span>`);
@@ -256,7 +335,7 @@ function tableRow(r) {
     <td class="num">${bedTxt}</td>
     <td class="num">${r.baths == null ? "—" : r.baths}</td>
     <td class="num">${r.sqft == null ? "—" : fmt(r.sqft)}</td>
-    <td>${esc(r.neighborhood || "—")}</td>
+    <td>${esc(r.neighborhood_key || r.neighborhood || "—")}</td>
     <td>${esc(r.borough || "—")}</td>
     <td class="nowrap">${postedDate(r.posted_at) || "—"} ${map}</td>
   </tr>`;
@@ -320,11 +399,185 @@ async function loadStats() {
 }
 
 $("#apply").addEventListener("click", () => load(true));
-$("#reset").addEventListener("click", () => { $("#filters").reset(); load(true); });
+$("#reset").addEventListener("click", () => {
+  $("#filters").reset(); selected.clear(); renderChips(); load(true);
+});
 $("#loadmore").addEventListener("click", () => load(false));
 $("#filters").addEventListener("submit", () => load(true));
 $("#viewCards").addEventListener("click", () => { view = "cards"; render(); });
 $("#viewTable").addEventListener("click", () => { view = "table"; render(); });
+
+// ---- Advanced neighborhood selection (inline SVG map of NYC neighborhoods) ----
+const selected = new Set();      // committed neighborhood names → drive query + chips
+let draft = new Set();           // edited inside the modal until Apply
+let nbhdCounts = {};             // neighborhood name → listing count (from /stats)
+let mapBuilt = false;
+let vb = null, vbHome = null;    // current / fit-all viewBox {x,y,w,h}
+const SVGNS = "http://www.w3.org/2000/svg";
+
+function nbhdFill(name) {
+  if (draft.has(name)) return "rgba(52,211,153,.85)";        // selected → green
+  const c = nbhdCounts[name] || 0;
+  if (!c) return "#1b2230";                                  // no listings → muted
+  const maxc = Math.max(1, ...Object.values(nbhdCounts));
+  const a = 0.18 + 0.62 * Math.sqrt(c / maxc);              // more listings → brighter
+  return `rgba(78,161,255,${a.toFixed(3)})`;
+}
+
+function eachFeatureCoord(geom, fn) {
+  if (!geom) return;
+  const polys = geom.type === "Polygon" ? [geom.coordinates]
+              : geom.type === "MultiPolygon" ? geom.coordinates : [];
+  for (const poly of polys) for (const ring of poly) for (const pt of ring) fn(pt[0], pt[1]);
+}
+
+async function buildMap() {
+  if (mapBuilt) return;
+  let gj;
+  try {
+    const [g, s] = await Promise.all([
+      fetch("/neighborhoods.geojson").then((r) => r.json()),
+      fetch("/stats").then((r) => r.json()).catch(() => ({})),
+    ]);
+    gj = g; nbhdCounts = (s && s.by_neighborhood) || {};
+  } catch { $("#mapLoading").textContent = "Could not load the map."; return; }
+
+  let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
+  for (const f of gj.features) eachFeatureCoord(f.geometry, (lng, lat) => {
+    if (lng < minLng) minLng = lng; if (lng > maxLng) maxLng = lng;
+    if (lat < minLat) minLat = lat; if (lat > maxLat) maxLat = lat;
+  });
+  const kx = Math.cos((minLat + maxLat) / 2 * Math.PI / 180), K = 1000;
+  const px = (lng) => (lng - minLng) * kx * K;               // equirectangular, north-up
+  const py = (lat) => (maxLat - lat) * K;
+  vbHome = { x: 0, y: 0, w: (maxLng - minLng) * kx * K, h: (maxLat - minLat) * K };
+  vb = { ...vbHome }; applyViewBox();
+
+  const ringD = (ring) =>
+    "M" + ring.map((p) => px(p[0]).toFixed(1) + " " + py(p[1]).toFixed(1)).join("L") + "Z";
+  const svg = $("#nbhdMap");
+  const frag = document.createDocumentFragment();
+  for (const f of gj.features) {
+    if (!f.geometry) continue;
+    const name = f.properties.neighborhood;
+    const polys = f.geometry.type === "Polygon" ? [f.geometry.coordinates] : f.geometry.coordinates;
+    let d = "";
+    for (const poly of polys) for (const ring of poly) d += ringD(ring);
+    const path = document.createElementNS(SVGNS, "path");
+    path.setAttribute("d", d);
+    path.setAttribute("fill-rule", "evenodd");
+    path.dataset.name = name;
+    path.style.fill = nbhdFill(name);
+    const c = nbhdCounts[name] || 0;
+    const title = document.createElementNS(SVGNS, "title");
+    title.textContent = `${name} — ${c} listing${c === 1 ? "" : "s"}`;
+    path.appendChild(title);
+    path.addEventListener("click", () => toggleNbhd(name, path));
+    frag.appendChild(path);
+  }
+  svg.appendChild(frag);
+  $("#mapLoading").hidden = true;
+  mapBuilt = true;
+  wireZoomPan(svg);
+}
+
+function applyViewBox() { $("#nbhdMap").setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`); }
+
+function clampViewBox() {
+  vb.w = Math.min(vb.w, vbHome.w); vb.h = Math.min(vb.h, vbHome.h);
+  vb.x = Math.max(vbHome.x, Math.min(vb.x, vbHome.x + vbHome.w - vb.w));
+  vb.y = Math.max(vbHome.y, Math.min(vb.y, vbHome.y + vbHome.h - vb.h));
+}
+
+function toggleNbhd(name, path) {
+  if (draft.has(name)) draft.delete(name); else draft.add(name);
+  path.classList.toggle("sel", draft.has(name));
+  path.style.fill = nbhdFill(name);
+  $("#nbhdSelCount").textContent = draft.size ? `${draft.size} selected` : "";
+}
+
+function refreshPaths() {
+  for (const p of $("#nbhdMap").querySelectorAll("path")) {
+    p.classList.toggle("sel", draft.has(p.dataset.name));
+    p.style.fill = nbhdFill(p.dataset.name);
+  }
+  $("#nbhdSelCount").textContent = draft.size ? `${draft.size} selected` : "";
+}
+
+function wireZoomPan(svg) {
+  const toSvg = (cx, cy) => {
+    const r = svg.getBoundingClientRect();
+    const scale = Math.min(r.width / vb.w, r.height / vb.h);   // preserveAspectRatio=meet
+    return {
+      x: vb.x + (cx - r.left - (r.width - vb.w * scale) / 2) / scale,
+      y: vb.y + (cy - r.top - (r.height - vb.h * scale) / 2) / scale,
+    };
+  };
+  svg.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const p = toSvg(e.clientX, e.clientY);
+    const f = e.deltaY < 0 ? 0.85 : 1 / 0.85;
+    const nw = Math.min(vbHome.w, Math.max(vbHome.w / 60, vb.w * f));
+    const nh = nw * (vb.h / vb.w);
+    vb.x = p.x - (p.x - vb.x) * (nw / vb.w);
+    vb.y = p.y - (p.y - vb.y) * (nh / vb.h);
+    vb.w = nw; vb.h = nh; clampViewBox(); applyViewBox();
+  }, { passive: false });
+
+  let down = null, dragged = false;
+  svg.addEventListener("pointerdown", (e) => { down = { x: e.clientX, y: e.clientY }; dragged = false; });
+  svg.addEventListener("pointermove", (e) => {
+    if (!down) return;
+    if (!dragged && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) {
+      dragged = true; svg.classList.add("panning");
+    }
+    if (!dragged) return;
+    const r = svg.getBoundingClientRect();
+    const scale = Math.min(r.width / vb.w, r.height / vb.h);
+    vb.x -= (e.clientX - down.x) / scale; vb.y -= (e.clientY - down.y) / scale;
+    down = { x: e.clientX, y: e.clientY }; clampViewBox(); applyViewBox();
+  });
+  const end = () => { down = null; svg.classList.remove("panning"); };
+  svg.addEventListener("pointerup", end);
+  svg.addEventListener("pointerleave", end);
+  // Swallow the click that ends a drag so it doesn't toggle a neighborhood.
+  svg.addEventListener("click", (e) => { if (dragged) { e.stopPropagation(); dragged = false; } }, true);
+}
+
+function applySearch(term) {
+  term = term.trim().toLowerCase();
+  for (const p of $("#nbhdMap").querySelectorAll("path"))
+    p.style.opacity = (!term || p.dataset.name.toLowerCase().includes(term)) ? "1" : "0.12";
+}
+
+function renderChips() {
+  const box = $("#nbhdChips");
+  box.innerHTML = [...selected].sort().map((n) =>
+    `<span class="nchip">${esc(n)}<button type="button" data-n="${esc(n)}" title="remove">✕</button></span>`
+  ).join("");
+  for (const b of box.querySelectorAll("button"))
+    b.addEventListener("click", () => { selected.delete(b.dataset.n); renderChips(); load(true); });
+}
+
+function openMap() {
+  draft = new Set(selected);
+  $("#mapModal").hidden = false;
+  buildMap().then(() => { if (mapBuilt) refreshPaths(); });
+}
+function closeMap() { $("#mapModal").hidden = true; }
+function applyMap() {
+  selected.clear(); for (const n of draft) selected.add(n);
+  renderChips(); closeMap(); load(true);
+}
+
+$("#openMap").addEventListener("click", openMap);
+$("#nbhdClose").addEventListener("click", closeMap);
+$("#nbhdApply").addEventListener("click", applyMap);
+$("#nbhdClear").addEventListener("click", () => { draft.clear(); refreshPaths(); });
+$("#nbhdReset").addEventListener("click", () => { if (vbHome) { vb = { ...vbHome }; applyViewBox(); } });
+$("#nbhdSearch").addEventListener("input", (e) => applySearch(e.target.value));
+$("#mapModal").addEventListener("click", (e) => { if (e.target.id === "mapModal") closeMap(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#mapModal").hidden) closeMap(); });
 
 buildHeader();
 loadStats();

@@ -31,7 +31,11 @@ class Rental(Base):
     source: Mapped[str] = mapped_column(String(32), default="craigslist", index=True)
 
     title: Mapped[str | None] = mapped_column(String(512))
+    # Free-text neighborhood as posted on the source (messy, user-entered).
     neighborhood: Mapped[str | None] = mapped_column(String(255))
+    # Canonical neighborhood resolved from lat/long against NYC boundaries
+    # (see home_hunter.geo). This is what the map filter queries on.
+    neighborhood_key: Mapped[str | None] = mapped_column(String(128), index=True)
     borough: Mapped[str | None] = mapped_column(String(64), index=True)
 
     price: Mapped[int | None] = mapped_column(Integer, index=True)  # monthly rent USD

@@ -12,11 +12,12 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .. import geo
 from ..config import load_config
 from ..db import get_sessionmaker, init_db, make_engine
 from ..models import Rental, RentHistory
@@ -40,6 +41,7 @@ class RentalOut(BaseModel):
     source: str
     title: str | None
     neighborhood: str | None
+    neighborhood_key: str | None
     borough: str | None
     price: int | None
     beds: float | None
@@ -80,6 +82,12 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/neighborhoods.geojson")
+def neighborhoods_geojson() -> Response:
+    """NYC neighborhood boundaries the map UI renders as clickable shapes."""
+    return Response(content=geo.geojson_text(), media_type="application/geo+json")
+
+
 @app.get("/stats")
 def stats(session: Annotated[Session, Depends(get_session)]) -> dict:
     """Summary counts for the page header."""
@@ -91,6 +99,11 @@ def stats(session: Annotated[Session, Depends(get_session)]) -> dict:
         .group_by(Rental.borough)
         .order_by(func.count().desc())
     ).all()
+    nb_rows = session.execute(
+        select(Rental.neighborhood_key, func.count())
+        .where(Rental.neighborhood_key.is_not(None))
+        .group_by(Rental.neighborhood_key)
+    ).all()
     return {
         "total": total,
         "rent": {
@@ -99,6 +112,7 @@ def stats(session: Annotated[Session, Depends(get_session)]) -> dict:
             "max": session.scalar(select(func.max(Rental.price))),
         },
         "by_borough": {b: c for b, c in rows},
+        "by_neighborhood": {n: c for n, c in nb_rows},
     }
 
 
@@ -106,6 +120,7 @@ def stats(session: Annotated[Session, Depends(get_session)]) -> dict:
 def list_rentals(
     session: Annotated[Session, Depends(get_session)],
     borough: str | None = None,
+    neighborhood: Annotated[list[str] | None, Query()] = None,
     min_rent: int | None = None,
     max_rent: int | None = None,
     min_beds: float | None = None,
@@ -121,6 +136,8 @@ def list_rentals(
     stmt = select(Rental)
     if borough is not None:
         stmt = stmt.where(Rental.borough == borough)
+    if neighborhood:
+        stmt = stmt.where(Rental.neighborhood_key.in_(neighborhood))
     if min_rent is not None:
         stmt = stmt.where(Rental.price >= min_rent)
     if max_rent is not None:

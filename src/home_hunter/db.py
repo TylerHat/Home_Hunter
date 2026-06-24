@@ -5,10 +5,11 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from . import geo
 from .config import Config
 from .models import Base, Rental, RentHistory, utcnow
 from .scraper.craigslist.parse import RentalListing
@@ -36,8 +37,24 @@ def make_engine(config: Config) -> Engine:
 
 
 def init_db(engine: Engine) -> None:
-    """Create tables if they don't exist."""
+    """Create tables if they don't exist, then apply lightweight migrations."""
     Base.metadata.create_all(engine)
+    _ensure_columns(engine)
+
+
+def _ensure_columns(engine: Engine) -> None:
+    """Add columns introduced after a DB was first created (no Alembic).
+
+    ``create_all`` never alters existing tables, so a DB built before a column
+    existed needs a one-off ``ADD COLUMN``. Idempotent on SQLite and Postgres.
+    """
+    insp = inspect(engine)
+    if "rentals" not in insp.get_table_names():
+        return
+    columns = {col["name"] for col in insp.get_columns("rentals")}
+    if "neighborhood_key" not in columns:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE rentals ADD COLUMN neighborhood_key VARCHAR(128)"))
 
 
 def get_sessionmaker(engine: Engine) -> sessionmaker[Session]:
@@ -68,6 +85,7 @@ def upsert_listing(session: Session, listing: RentalListing) -> UpsertStats:
         row = Rental(pid=listing.pid, first_seen=now)
         for field in _RENTAL_FIELDS:
             setattr(row, field, getattr(listing, field))
+        row.neighborhood_key = geo.neighborhood_for(row.latitude, row.longitude)
         row.raw = listing.raw
         row.last_seen = now
         row.last_scraped = now
@@ -87,6 +105,7 @@ def upsert_listing(session: Session, listing: RentalListing) -> UpsertStats:
         value = getattr(listing, field)
         if value is not None:
             setattr(row, field, value)
+    row.neighborhood_key = geo.neighborhood_for(row.latitude, row.longitude)
     row.raw = listing.raw
     row.last_seen = now
     row.last_scraped = now
