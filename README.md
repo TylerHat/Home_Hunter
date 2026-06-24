@@ -4,8 +4,8 @@ Scrapes **NYC apartment rentals** from Craigslist into a structured, queryable
 database, run **locally on demand** and **100% free** — no accounts, no paid
 services. Captures rent, beds/baths, **square footage**, and **amenities**
 (laundry, parking, pets, no-fee), plus neighborhood, geolocation, and a
-rent-history trend. Backend + database + read API (the search/filter UI is a
-later phase). An optional manual cloud mode can run it off your home IP.
+rent-history trend. Ships with a **read API and a built-in web UI** to browse and
+filter listings; an optional manual cloud mode can run it off your home IP.
 
 > **Why Craigslist?** It has little bot detection, so the scraper needs **no
 > headless browser** — plain HTTP runs reliably on free CI runners. Zillow and
@@ -34,7 +34,8 @@ Local CLI, on demand   (optional: manual GitHub Actions)
              └─ db.upsert_listings()                # upsert by pid + rent history
                    └─ Neon Postgres (or SQLite)
                          ▲
-                         └─ api/app.py (FastAPI read API)  ← future UI consumes this
+                         └─ api/app.py (FastAPI read API)
+                               └─ api/static/index.html  ← built-in web UI at /
 ```
 
 Per borough: page through `/search/<area>/apa` (apartments for rent), then open
@@ -56,9 +57,10 @@ python scripts/run_scrape.py --area mnh --once --no-detail --dry-run
 # 3. Real run -> writes to a local SQLite file (home_hunter.db) by default
 python scripts/run_scrape.py --area mnh --once
 
-# 4. Browse the data via the API
+# 4. Browse the data in the web UI (or the API)
 uvicorn home_hunter.api.app:app --reload --app-dir src
-#    open http://127.0.0.1:8000/docs
+#    UI:        http://127.0.0.1:8000/
+#    API docs:  http://127.0.0.1:8000/docs
 ```
 
 By default (no `DATABASE_URL` set) data goes to a local **SQLite** file, so you
@@ -78,26 +80,31 @@ All settings live in [config.yaml](config.yaml):
 ## Database schema
 
 - **`rentals`** — keyed by Craigslist `pid`; title, neighborhood, borough, rent,
-  beds, baths, sqft, housing type, amenity columns (`laundry`, `parking`,
-  `cats_ok`, `dogs_ok`, `furnished`, `no_smoking`, `wheelchair_accessible`,
-  `air_conditioning`, `ev_charging`, `no_fee`), a catch-all `amenities` JSON list,
-  lat/long, url, `posted_at`/`updated_at`, and `first_seen`/`last_seen`/`last_scraped`.
+  beds, baths, sqft, housing type, text attributes (`laundry`, `parking`,
+  `rent_period`), boolean amenity flags (`cats_ok`, `dogs_ok`, `furnished`,
+  `no_smoking`, `wheelchair_accessible`, `air_conditioning`, `ev_charging`,
+  `no_fee`), a catch-all `amenities` JSON list, lat/long, url,
+  `posted_at`/`updated_at`, and `first_seen`/`last_seen`/`last_scraped`.
 - **`rent_history`** — a row is appended only when a listing's rent changes, so the
   DB becomes a rent-trend analysis asset over time.
 
 Each run upserts on `pid`: update existing, insert new, append rent history on change.
 
-## Query API
+## Web UI & query API
 
-`uvicorn home_hunter.api.app:app --app-dir src` exposes:
+`uvicorn home_hunter.api.app:app --app-dir src` serves both a UI and a read API:
 
+- `GET /` — a self-contained web page (no build step) with a filter form and
+  listing cards. It calls the endpoints below.
 - `GET /rentals` — filter by `borough`, `min_rent`, `max_rent`, `min_beds`,
   `max_beds`, `min_sqft`, `housing_type`, `cats_ok`, `dogs_ok`, `no_fee`, with
-  `limit`/`offset`.
+  `limit`/`offset`. Results are ordered by rent ascending (nulls last).
 - `GET /rentals/{pid}` and `GET /rentals/{pid}/rent-history`.
+- `GET /stats` — totals, min/avg/max rent, and per-borough counts (powers the
+  UI header).
 - `GET /health`.
 
-This is the contract the future search UI will call.
+The API is also the contract a richer future UI (map, score sorting) will call.
 
 ## Optional: run on GitHub instead of locally
 
