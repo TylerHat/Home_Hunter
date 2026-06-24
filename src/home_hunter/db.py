@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from statistics import median
 
 from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from . import dedup, geo
+from . import dedup, flags, geo
 from .config import Config
+from .flags import FlagSettings
 from .models import Base, Rental, RentHistory, utcnow
 from .scraper.craigslist.parse import RentalListing
 
@@ -21,8 +23,8 @@ _RENTAL_FIELDS = (
     "source", "title", "neighborhood", "borough", "price", "beds", "baths",
     "sqft", "housing_type", "laundry", "parking", "cats_ok", "dogs_ok",
     "furnished", "no_smoking", "wheelchair_accessible", "air_conditioning",
-    "ev_charging", "no_fee", "rent_period", "amenities", "latitude",
-    "longitude", "url", "posted_at", "updated_at",
+    "ev_charging", "no_fee", "rent_period", "amenities", "image_count",
+    "latitude", "longitude", "url", "posted_at", "updated_at",
 )
 
 
@@ -58,10 +60,25 @@ def _ensure_columns(engine: Engine) -> None:
     if "dedup_key" not in columns:
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE rentals ADD COLUMN dedup_key VARCHAR(40)"))
-    # Index the dedup lookup (idempotent; valid on both SQLite and Postgres).
+    if "image_count" not in columns:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE rentals ADD COLUMN image_count INTEGER"))
+    # Scam-flag columns. Constant defaults backfill existing rows (FALSE / '[]')
+    # on both SQLite and Postgres, so the columns are never NULL.
+    if "flagged" not in columns:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE rentals ADD COLUMN flagged BOOLEAN DEFAULT FALSE"))
+    if "flag_reasons" not in columns:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE rentals ADD COLUMN flag_reasons JSON DEFAULT '[]'"))
+    # Index lookups used by dedup and the hide-flagged filter (idempotent; valid
+    # on both SQLite and Postgres).
     with engine.begin() as conn:
         conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_rentals_dedup_key ON rentals (dedup_key)")
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_rentals_flagged ON rentals (flagged)")
         )
 
 
@@ -108,7 +125,17 @@ def _find_repost(session: Session, key: str | None) -> Rental | None:
     return session.scalars(stmt).first()
 
 
-def upsert_listing(session: Session, listing: RentalListing) -> UpsertStats:
+def _apply_intrinsic_flags(row: Rental, settings: FlagSettings | None) -> None:
+    """Set scam flags from a row's own fields (no market context — see
+    ``recompute_market_flags`` for the median-relative signal)."""
+    result = flags.evaluate(row, settings=settings)
+    row.flagged = result.flagged
+    row.flag_reasons = result.reasons
+
+
+def upsert_listing(
+    session: Session, listing: RentalListing, settings: FlagSettings | None = None
+) -> UpsertStats:
     """Insert or update one rental; append rent history on a rent change.
 
     A listing arriving under a new ``pid`` but matching an existing row's
@@ -133,6 +160,7 @@ def upsert_listing(session: Session, listing: RentalListing) -> UpsertStats:
             setattr(row, field, getattr(listing, field))
         row.dedup_key = key
         row.neighborhood_key = geo.neighborhood_for(row.latitude, row.longitude)
+        _apply_intrinsic_flags(row, settings)
         row.raw = listing.raw
         row.last_seen = now
         row.last_scraped = now
@@ -156,6 +184,7 @@ def upsert_listing(session: Session, listing: RentalListing) -> UpsertStats:
             setattr(row, field, value)
     row.dedup_key = key or row.dedup_key
     row.neighborhood_key = geo.neighborhood_for(row.latitude, row.longitude)
+    _apply_intrinsic_flags(row, settings)
     row.raw = listing.raw
     row.last_seen = now
     row.last_scraped = now
@@ -166,9 +195,44 @@ def upsert_listing(session: Session, listing: RentalListing) -> UpsertStats:
     return stats
 
 
-def upsert_listings(session: Session, listings: list[RentalListing]) -> UpsertStats:
+def upsert_listings(
+    session: Session, listings: list[RentalListing], settings: FlagSettings | None = None
+) -> UpsertStats:
     """Upsert a batch of listings within the given session (caller commits)."""
     total = UpsertStats()
     for listing in listings:
-        total += upsert_listing(session, listing)
+        total += upsert_listing(session, listing, settings)
     return total
+
+
+def recompute_market_flags(session: Session, settings: FlagSettings | None = None) -> int:
+    """Re-evaluate scam flags for every row with market context, returning the
+    flagged count.
+
+    Computes a median rent per ``(borough, beds)`` cohort from the full dataset
+    and re-runs ``flags.evaluate`` on each row, so the "rent far below area
+    median" signal (which needs the whole picture) is applied on top of the
+    intrinsic signals set at upsert. Idempotent; the caller commits.
+    """
+    settings = settings or FlagSettings()
+    rows = list(session.scalars(select(Rental)).all())
+
+    cohorts: dict[tuple, list[int]] = {}
+    for row in rows:
+        if row.price is not None:
+            cohorts.setdefault((row.borough, row.beds), []).append(row.price)
+    medians = {
+        cohort: median(prices)
+        for cohort, prices in cohorts.items()
+        if len(prices) >= settings.min_cohort_size
+    }
+
+    flagged = 0
+    for row in rows:
+        result = flags.evaluate(
+            row, settings=settings, market_median=medians.get((row.borough, row.beds))
+        )
+        row.flagged = result.flagged
+        row.flag_reasons = result.reasons
+        flagged += int(result.flagged)
+    return flagged

@@ -58,6 +58,12 @@ _BEDS_RE = re.compile(r"(\d+(?:\.\d+)?)\s*br", re.I)
 _BATHS_RE = re.compile(r"(\d+(?:\.\d+)?)\s*ba\b", re.I)
 _SQFT_RE = re.compile(r"([\d,]+)\s*ft(?:<sup>2</sup>|&sup2;|²|2)", re.I)
 _NOFEE_RE = re.compile(r"no[\s\-]?fee", re.I)
+# Photos: the slider caption reads "image 1 of N" (the authoritative total).
+# Each photo also carries a `data-imgid="…"`, but it appears twice (main slide +
+# thumbnail), so the fallback counts *distinct* ids. A post with no photos has
+# neither (Craigslist shows a no_image.png placeholder), so the count is 0.
+_IMG_TOTAL_RE = re.compile(r"image\s+\d+\s+of\s+(\d+)", re.I)
+_IMGID_RE = re.compile(r'data-imgid="([^"]+)"')
 
 
 class RentalSummary(BaseModel):
@@ -103,6 +109,9 @@ class RentalListing(BaseModel):
     no_fee: bool = False
     rent_period: str | None = None
     amenities: list[str] = []
+    # Number of photos on the detail page (0 = none; None when no detail page
+    # was fetched). A strong scam signal — real listings almost always have photos.
+    image_count: int | None = None
 
     latitude: float | None = None
     longitude: float | None = None
@@ -180,6 +189,14 @@ def parse_search_results(page_html: str) -> list[RentalSummary]:
     return list(summaries.values())
 
 
+def _image_count(detail_html: str) -> int:
+    """How many photos the detail page carries (0 if none)."""
+    m = _IMG_TOTAL_RE.search(detail_html)
+    if m:
+        return int(m.group(1))
+    return len(set(_IMGID_RE.findall(detail_html)))
+
+
 def _parse_beds_baths(detail_html: str) -> tuple[float | None, float | None]:
     """Beds/baths from the `<span class="attr important">1BR / 1Ba</span>` block."""
     m = re.search(r'<span class="attr important">(.*?)</span>', detail_html, re.S)
@@ -227,6 +244,8 @@ def parse_detail(
     if sqft:
         listing.sqft = _price_to_int(sqft)
 
+    listing.image_count = _image_count(detail_html)
+
     # Structured attributes encoded as query-param links.
     amenities: list[str] = []
     for key, raw_text in _ATTR_LINK_RE.findall(detail_html):
@@ -263,5 +282,6 @@ def parse_detail(
     listing.raw = {
         "summary": summary.model_dump(),
         "attrs": amenities,
+        "image_count": listing.image_count,
     }
     return listing

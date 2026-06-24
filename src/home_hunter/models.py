@@ -44,6 +44,12 @@ class Rental(Base):
     # listing is too thin to fingerprint safely.
     dedup_key: Mapped[str | None] = mapped_column(String(40), index=True)
 
+    # Scam heuristics (see home_hunter.flags). `flagged` is set on upsert and in
+    # the end-of-run market pass; `flag_reasons` holds the human-readable signals
+    # (e.g. ["no photos"]) for the UI badge. Listings are flagged, never dropped.
+    flagged: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    flag_reasons: Mapped[list] = mapped_column(JSON, default=list)
+
     price: Mapped[int | None] = mapped_column(Integer, index=True)  # monthly rent USD
     beds: Mapped[float | None] = mapped_column(Float, index=True)
     baths: Mapped[float | None] = mapped_column(Float)
@@ -64,6 +70,8 @@ class Rental(Base):
     rent_period: Mapped[str | None] = mapped_column(String(32))
     # Catch-all list of raw amenity labels not promoted to their own column.
     amenities: Mapped[list] = mapped_column(JSON, default=list)
+    # Photo count from the detail page (0 = none; NULL when no detail was fetched).
+    image_count: Mapped[int | None] = mapped_column(Integer)
 
     latitude: Mapped[float | None] = mapped_column(Float)
     longitude: Mapped[float | None] = mapped_column(Float)

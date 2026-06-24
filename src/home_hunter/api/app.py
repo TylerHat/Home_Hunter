@@ -55,6 +55,9 @@ class RentalOut(BaseModel):
     furnished: bool
     no_fee: bool
     amenities: list
+    image_count: int | None
+    flagged: bool
+    flag_reasons: list | None
     latitude: float | None
     longitude: float | None
     url: str | None
@@ -145,6 +148,7 @@ def list_rentals(
     cats_ok: bool | None = None,
     dogs_ok: bool | None = None,
     no_fee: bool | None = None,
+    hide_flagged: bool = False,
     sort: str = "price",
     order: str = "asc",
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
@@ -173,6 +177,8 @@ def list_rentals(
         stmt = stmt.where(Rental.dogs_ok == dogs_ok)
     if no_fee is not None:
         stmt = stmt.where(Rental.no_fee == no_fee)
+    if hide_flagged:
+        stmt = stmt.where(Rental.flagged.is_(False))
     col = _SORT_COLUMNS.get(sort, Rental.price)
     ordering = col.desc() if order == "desc" else col.asc()
     # pid is a stable tiebreaker so paging (offset/Load more) never skips or
