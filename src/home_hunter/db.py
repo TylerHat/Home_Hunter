@@ -23,7 +23,7 @@ _RENTAL_FIELDS = (
     "source", "title", "neighborhood", "borough", "price", "beds", "baths",
     "sqft", "housing_type", "laundry", "parking", "cats_ok", "dogs_ok",
     "furnished", "no_smoking", "wheelchair_accessible", "air_conditioning",
-    "ev_charging", "no_fee", "rent_period", "amenities", "image_count",
+    "ev_charging", "no_fee", "rent_stabilized", "rent_period", "amenities", "image_count",
     "latitude", "longitude", "url", "posted_at", "updated_at",
 )
 
@@ -71,6 +71,13 @@ def _ensure_columns(engine: Engine) -> None:
     if "flag_reasons" not in columns:
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE rentals ADD COLUMN flag_reasons JSON DEFAULT '[]'"))
+    # Rent-stabilized marker. Constant FALSE default backfills existing rows; the
+    # photo-style text signal needs a re-scrape to populate old rows.
+    if "rent_stabilized" not in columns:
+        with engine.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE rentals ADD COLUMN rent_stabilized BOOLEAN DEFAULT FALSE")
+            )
     # Index lookups used by dedup and the hide-flagged filter (idempotent; valid
     # on both SQLite and Postgres).
     with engine.begin() as conn:
@@ -79,6 +86,9 @@ def _ensure_columns(engine: Engine) -> None:
         )
         conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_rentals_flagged ON rentals (flagged)")
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_rentals_rent_stabilized ON rentals (rent_stabilized)")
         )
 
 

@@ -58,6 +58,11 @@ _BEDS_RE = re.compile(r"(\d+(?:\.\d+)?)\s*br", re.I)
 _BATHS_RE = re.compile(r"(\d+(?:\.\d+)?)\s*ba\b", re.I)
 _SQFT_RE = re.compile(r"([\d,]+)\s*ft(?:<sup>2</sup>|&sup2;|²|2)", re.I)
 _NOFEE_RE = re.compile(r"no[\s\-]?fee", re.I)
+# "Rent stabilized" is a prized NYC status (capped, renewable rent). Match the
+# common phrasings — "rent stabilized"/"rent stabilization" and the looser
+# "rent stable" — but require the words adjacent, so "the rent is stable" (a
+# different, weaker claim) doesn't trip it.
+_RENT_STABILIZED_RE = re.compile(r"rent[\s\-]?stab(?:il|le)", re.I)
 # Photos: the slider caption reads "image 1 of N" (the authoritative total).
 # Each photo also carries a `data-imgid="…"`, but it appears twice (main slide +
 # thumbnail), so the fallback counts *distinct* ids. A post with no photos has
@@ -107,6 +112,9 @@ class RentalListing(BaseModel):
     air_conditioning: bool = False
     ev_charging: bool = False
     no_fee: bool = False
+    # True when the title/body advertises a rent-stabilized unit (a capped,
+    # renewable NYC rent). Surfaced with a green marker in the UI.
+    rent_stabilized: bool = False
     rent_period: str | None = None
     amenities: list[str] = []
     # Number of photos on the detail page (0 = none; None when no detail page
@@ -274,10 +282,12 @@ def parse_detail(
         listing.posted_at = _parse_dt(times[0])
         listing.updated_at = _parse_dt(times[-1])
 
-    # No-fee is NYC-specific and not a structured Craigslist attr; detect it in
-    # the title or body text.
+    # No-fee and rent-stabilized are NYC-specific free-text claims, not
+    # structured Craigslist attrs; detect them in the title or body text.
     body = _first(re.compile(r'<section id="postingbody">(.*?)</section>', re.S), detail_html) or ""
-    listing.no_fee = bool(_NOFEE_RE.search((listing.title or "") + " " + body))
+    text_blob = (listing.title or "") + " " + body
+    listing.no_fee = bool(_NOFEE_RE.search(text_blob))
+    listing.rent_stabilized = bool(_RENT_STABILIZED_RE.search(text_blob))
 
     listing.raw = {
         "summary": summary.model_dump(),

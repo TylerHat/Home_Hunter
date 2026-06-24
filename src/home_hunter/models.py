@@ -67,6 +67,9 @@ class Rental(Base):
     air_conditioning: Mapped[bool] = mapped_column(Boolean, default=False)
     ev_charging: Mapped[bool] = mapped_column(Boolean, default=False)
     no_fee: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # True when the listing text advertises a rent-stabilized unit (parsed from
+    # title/body in the scraper). Badged green in the UI; never drops a listing.
+    rent_stabilized: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     rent_period: Mapped[str | None] = mapped_column(String(32))
     # Catch-all list of raw amenity labels not promoted to their own column.
     amenities: Mapped[list] = mapped_column(JSON, default=list)

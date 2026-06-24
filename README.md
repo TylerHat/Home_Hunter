@@ -95,7 +95,7 @@ All settings live in [config.yaml](config.yaml):
   beds, baths, sqft, housing type, text attributes (`laundry`, `parking`,
   `rent_period`), boolean amenity flags (`cats_ok`, `dogs_ok`, `furnished`,
   `no_smoking`, `wheelchair_accessible`, `air_conditioning`, `ev_charging`,
-  `no_fee`), a catch-all `amenities` JSON list, lat/long, url,
+  `no_fee`, `rent_stabilized`), a catch-all `amenities` JSON list, lat/long, url,
   `posted_at`/`updated_at`, and `first_seen`/`last_seen`/`last_scraped`.
   Scam-detection fields: `image_count` (photos on the detail page; `0` is the
   strongest scam signal), `flagged`, and `flag_reasons` (e.g. `["no photos"]`).
@@ -129,8 +129,9 @@ note the photo signal only applies to rows scraped since the feature landed.
   `max_beds`, `min_sqft`, `housing_type`, `cats_ok`, `dogs_ok`, `no_fee`, and
   `hide_flagged` (drop suspected scams), with `limit`/`offset`. Results are
   ordered by rent ascending (nulls last). Each listing carries `image_count`,
-  `flagged`, and `flag_reasons`; the UI shows a **⚠ possible scam** badge and a
-  **Hide suspected scams** filter checkbox.
+  `flagged`, `flag_reasons`, and `rent_stabilized`; the UI shows a **⚠ possible
+  scam** badge, a green **🟢 rent stabilized** badge, and a **Hide suspected
+  scams** filter checkbox.
 - `GET /rentals/{pid}` and `GET /rentals/{pid}/rent-history`.
 - `GET /stats` — totals, min/avg/max rent, and per-borough + per-neighborhood
   counts (powers the UI header and the map shading).

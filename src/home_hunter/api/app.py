@@ -55,6 +55,7 @@ class RentalOut(BaseModel):
     dogs_ok: bool
     furnished: bool
     no_fee: bool
+    rent_stabilized: bool
     amenities: list
     image_count: int | None
     flagged: bool
