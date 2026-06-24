@@ -97,6 +97,42 @@
   tbody td.titlecell a:hover { color: var(--accent); }
   tbody td.nowrap { white-space: nowrap; }
 
+  /* --- tabs + analytics --- */
+  .tabs { display: flex; gap: 6px; margin-top: 12px; }
+  .tab {
+    background: transparent; color: var(--muted); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 16px; font-weight: 600; font-size: 14px; cursor: pointer;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { background: var(--accent); color: #06121f; border-color: var(--accent); }
+  .muted { color: var(--muted); }
+
+  .afilters {
+    display: flex; gap: 14px; align-items: end; flex-wrap: wrap;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 14px; margin-bottom: 14px;
+  }
+  .afilters label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }
+  .afilters input, .afilters select {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 10px; font-size: 14px;
+  }
+  .acount { color: var(--muted); font-size: 13px; margin: 4px 2px 14px; }
+
+  .chartcard { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 18px; }
+  .charthead { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+  .charthead strong { font-size: 15px; }
+  .bars { display: flex; flex-direction: column; gap: 7px; max-height: 440px; overflow-y: auto; }
+  .bar { display: grid; grid-template-columns: 160px 1fr auto; align-items: center; gap: 10px; }
+  .barlabel { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bartrack { background: var(--panel2); border-radius: 6px; height: 16px; overflow: hidden; }
+  .barfill { background: var(--accent); height: 100%; border-radius: 6px; min-width: 2px; }
+  .barval { font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--accent2); font-weight: 600; }
+
+  tbody td.bedcell { white-space: nowrap; }
+  tbody td.bedcell .bavg { color: var(--accent2); font-weight: 700; }
+  tbody td.bedcell .bsub { color: var(--muted); font-size: 11.5px; font-weight: 400; }
+
   /* --- advanced neighborhood selection --- */
   .nbhd-cell { display: flex; flex-direction: column; gap: 5px; justify-content: flex-end; grid-column: span 2; }
   .nbhd-cell .cap { font-size: 12px; color: var(--muted); }
@@ -154,9 +190,14 @@
 <header>
   <h1>🏙️ Home Hunter <small>— NYC apartment rentals</small></h1>
   <div class="stats" id="stats">Loading…</div>
+  <nav class="tabs">
+    <button class="tab active" id="tabBrowse" type="button">Browse</button>
+    <button class="tab" id="tabAnalytics" type="button">Analytics</button>
+  </nav>
 </header>
 
 <main>
+  <section id="browseView">
   <form class="filters" id="filters" onsubmit="return false">
     <label>Borough
       <select name="borough" id="borough">
@@ -202,6 +243,39 @@
     </table>
   </div>
   <div class="more"><button class="ghost" id="loadmore" style="display:none">Load more</button></div>
+  </section>
+
+  <section id="analyticsView" hidden>
+    <div class="afilters">
+      <label>Borough
+        <select id="aBorough">
+          <option value="">All boroughs</option>
+          <option>Manhattan</option><option>Brooklyn</option><option>Queens</option>
+          <option>Bronx</option><option>Staten Island</option>
+        </select>
+      </label>
+      <label>Min listings<input type="number" id="aMinListings" min="1" step="1" value="3" /></label>
+      <div class="actions"><button id="aApply" type="button">Apply</button></div>
+    </div>
+    <div class="acount" id="aCount"></div>
+    <div class="chartcard">
+      <div class="charthead">
+        <strong>Average rent by neighborhood</strong>
+        <div class="viewtoggle" id="chartBedsToggle">
+          <button class="ghost" data-beds="studio" type="button">Studio</button>
+          <button class="ghost active" data-beds="1" type="button">1 BR</button>
+          <button class="ghost" data-beds="2" type="button">2 BR</button>
+        </div>
+      </div>
+      <div class="bars" id="aBars"></div>
+    </div>
+    <div class="tablewrap">
+      <table id="atable">
+        <thead><tr></tr></thead>
+        <tbody id="atbody"></tbody>
+      </table>
+    </div>
+  </section>
 </main>
 
 <div class="modal" id="mapModal" hidden>
@@ -231,6 +305,12 @@ let rows = [];                     // every listing loaded so far (re-rendered o
 let loaded = false;                // a fetch has completed at least once
 let view = "cards";                // "cards" | "table"
 let sortKey = "price", sortDir = "asc";
+
+// ---- Analytics tab state ----
+let analyticsLoaded = false;       // analytics fetched at least once (lazy on first open)
+let analyticsRows = [];            // per-neighborhood stats from /analytics/neighborhoods
+let analyticsSort = { key: "total", dir: "desc" };
+let chartBeds = "1";               // which bed bucket the bar chart compares
 
 const $ = (s) => document.querySelector(s);
 const fmt = (n) => n == null ? null : Number(n).toLocaleString();
@@ -584,7 +664,143 @@ $("#nbhdSearch").addEventListener("input", (e) => applySearch(e.target.value));
 $("#mapModal").addEventListener("click", (e) => { if (e.target.id === "mapModal") closeMap(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#mapModal").hidden) closeMap(); });
 
+// ---- Analytics tab: per-neighborhood rent stats (table + bar charts) ----
+// Whole dataset arrives in one fetch, so sorting/charting is done client-side.
+// Bed cells sort by the bucket's average; null values (no listings) sort last.
+const ACOLUMNS = [
+  { key: "neighborhood", label: "Neighborhood", get: (r) => (r.neighborhood || "").toLowerCase() },
+  { key: "borough", label: "Borough", get: (r) => (r.borough || "").toLowerCase() },
+  { key: "total", label: "Listings", num: true, get: (r) => r.total },
+  { key: "studio", label: "Studio", num: true, get: (r) => r.beds.studio?.avg },
+  { key: "1", label: "1 BR", num: true, get: (r) => r.beds["1"]?.avg },
+  { key: "2", label: "2 BR", num: true, get: (r) => r.beds["2"]?.avg },
+  { key: "ppsf", label: "$/ft²", num: true, get: (r) => r.ppsf },
+  { key: "no_fee_pct", label: "% no-fee", num: true, get: (r) => r.no_fee_pct },
+];
+
+function buildAHeader() {
+  const tr = $("#atable thead tr");
+  tr.innerHTML = ACOLUMNS.map((c) =>
+    `<th data-akey="${c.key}" class="${c.num ? "num" : ""}">${esc(c.label)} <span class="arrow"></span></th>`
+  ).join("");
+  for (const th of tr.querySelectorAll("th[data-akey]")) {
+    th.addEventListener("click", () => {
+      const key = th.dataset.akey;
+      if (analyticsSort.key === key) analyticsSort.dir = analyticsSort.dir === "asc" ? "desc" : "asc";
+      else analyticsSort = { key, dir: key === "neighborhood" || key === "borough" ? "asc" : "desc" };
+      renderAnalyticsTable();
+    });
+  }
+}
+
+function sortedAnalytics() {
+  const col = ACOLUMNS.find((c) => c.key === analyticsSort.key) || ACOLUMNS[2];
+  const dir = analyticsSort.dir === "asc" ? 1 : -1;
+  return [...analyticsRows].sort((a, b) => {
+    const va = col.get(a), vb = col.get(b);
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;       // missing values always sort last
+    if (vb == null) return -1;
+    return va < vb ? -dir : va > vb ? dir : 0;
+  });
+}
+
+function bedCell(b) {
+  if (!b) return `<td class="num"><span class="muted">—</span></td>`;
+  return `<td class="num bedcell">
+    <div class="bavg">${money(b.avg)}</div>
+    <div class="bsub">med ${money(b.median)} · n=${b.count}</div>
+    <div class="bsub">${money(b.min)}–${money(b.max)}</div>
+  </td>`;
+}
+
+function analyticsRow(r) {
+  return `<tr>
+    <td>${esc(r.neighborhood)}</td>
+    <td>${esc(r.borough || "—")}</td>
+    <td class="num">${r.total}</td>
+    ${bedCell(r.beds.studio)}
+    ${bedCell(r.beds["1"])}
+    ${bedCell(r.beds["2"])}
+    <td class="num">${r.ppsf == null ? "—" : "$" + r.ppsf}</td>
+    <td class="num">${r.no_fee_pct == null ? "—" : r.no_fee_pct + "%"}</td>
+  </tr>`;
+}
+
+function renderAnalyticsTable() {
+  $("#atbody").innerHTML = sortedAnalytics().map(analyticsRow).join("");
+  for (const th of document.querySelectorAll("#atable th[data-akey]")) {
+    const active = th.dataset.akey === analyticsSort.key;
+    th.classList.toggle("sorted", active);
+    th.querySelector(".arrow").textContent = active ? (analyticsSort.dir === "asc" ? "▲" : "▼") : "";
+  }
+}
+
+function renderAnalyticsCharts() {
+  const bars = analyticsRows
+    .filter((r) => r.beds[chartBeds])
+    .map((r) => ({ name: r.neighborhood, avg: r.beds[chartBeds].avg, n: r.beds[chartBeds].count }))
+    .sort((a, b) => b.avg - a.avg);
+  const box = $("#aBars");
+  if (!bars.length) {
+    const what = chartBeds === "studio" ? "studio" : chartBeds + "-bed";
+    box.innerHTML = `<div class="muted" style="padding:8px 2px">No ${what} listings for this filter.</div>`;
+    return;
+  }
+  const max = Math.max(...bars.map((b) => b.avg));
+  box.innerHTML = bars.map((b) => `
+    <div class="bar">
+      <div class="barlabel" title="${esc(b.name)}">${esc(b.name)}</div>
+      <div class="bartrack"><div class="barfill" style="width:${(100 * b.avg / max).toFixed(1)}%"></div></div>
+      <div class="barval">${money(b.avg)} <span class="muted">· ${b.n}</span></div>
+    </div>`).join("");
+}
+
+async function loadAnalytics() {
+  const p = new URLSearchParams();
+  if ($("#aBorough").value) p.set("borough", $("#aBorough").value);
+  p.set("min_listings", $("#aMinListings").value || "1");
+  $("#aCount").textContent = "Loading…";
+  try {
+    const data = await (await fetch("/analytics/neighborhoods?" + p.toString())).json();
+    analyticsRows = data.neighborhoods || [];
+    analyticsLoaded = true;
+    if (!analyticsRows.length) {
+      $("#aCount").textContent = "";
+      $("#aBars").innerHTML = "";
+      $("#atbody").innerHTML = `<tr><td colspan="${ACOLUMNS.length}"><div class="empty">No data yet.<br>Run a scrape first:<br><br>
+        <code>python scripts/run_scrape.py --area mnh --once</code></div></td></tr>`;
+      return;
+    }
+    $("#aCount").textContent = `${analyticsRows.length} neighborhood${analyticsRows.length === 1 ? "" : "s"}`
+      + (data.excluded_flagged ? " · suspected scams excluded" : "");
+    renderAnalyticsCharts();
+    renderAnalyticsTable();
+  } catch { $("#aCount").textContent = "Could not load analytics."; }
+}
+
+function switchTab(name) {
+  const browse = name === "browse";
+  $("#browseView").hidden = !browse;
+  $("#analyticsView").hidden = browse;
+  $("#tabBrowse").classList.toggle("active", browse);
+  $("#tabAnalytics").classList.toggle("active", !browse);
+  if (!browse && !analyticsLoaded) loadAnalytics();
+}
+
+$("#tabBrowse").addEventListener("click", () => switchTab("browse"));
+$("#tabAnalytics").addEventListener("click", () => switchTab("analytics"));
+$("#aApply").addEventListener("click", loadAnalytics);
+for (const b of document.querySelectorAll("#chartBedsToggle button")) {
+  b.addEventListener("click", () => {
+    chartBeds = b.dataset.beds;
+    for (const x of document.querySelectorAll("#chartBedsToggle button")) x.classList.toggle("active", x === b);
+    renderAnalyticsCharts();
+  });
+}
+
 buildHeader();
+buildAHeader();
 loadStats();
 load(true);
 </script>
