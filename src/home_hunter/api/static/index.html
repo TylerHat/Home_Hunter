@@ -250,6 +250,8 @@ function query(extra) {
     else if (el.value !== "") p.set(el.name, el.value);
   }
   for (const n of selected) p.append("neighborhood", n);  // map selection (repeatable)
+  p.set("sort", sortKey);          // server sorts the whole dataset, not just the loaded page
+  p.set("order", sortDir);
   p.set("limit", PAGE);
   p.set("offset", extra?.offset ?? 0);
   return p.toString();
@@ -283,8 +285,10 @@ function esc(s) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-// ---- table view: columns + sorting (client-side, over the loaded rows) ----
-// tableRow() below renders cells in this same order; keep them in sync.
+// ---- table view: columns + sorting ----
+// Clicking a header re-fetches from the server sorted by that column (key must
+// match a key in app.py's _SORT_COLUMNS) so the sort covers every listing, not
+// just the loaded page. tableRow() renders cells in this same order; keep them in sync.
 const COLUMNS = [
   { key: "price", label: "Rent", num: true },
   { key: "title", label: "Title" },
@@ -306,22 +310,9 @@ function buildHeader() {
       const key = th.dataset.key;
       if (sortKey === key) sortDir = sortDir === "asc" ? "desc" : "asc";
       else { sortKey = key; sortDir = "asc"; }
-      render();
+      load(true);   // re-fetch page 1 in the new order so the sort spans every listing
     });
   }
-}
-
-function compareRows(a, b) {
-  const col = COLUMNS.find((c) => c.key === sortKey) || {};
-  let va = a[sortKey], vb = b[sortKey];
-  const na = va == null || va === "", nb = vb == null || vb === "";
-  if (na && nb) return 0;
-  if (na) return 1;                 // nulls always sort last, both directions
-  if (nb) return -1;
-  if (col.date) { va = new Date(va).getTime(); vb = new Date(vb).getTime(); }
-  else if (!col.num) { va = String(va).toLowerCase(); vb = String(vb).toLowerCase(); }
-  const d = va < vb ? -1 : va > vb ? 1 : 0;
-  return sortDir === "asc" ? d : -d;
 }
 
 function tableRow(r) {
@@ -342,7 +333,8 @@ function tableRow(r) {
 }
 
 function renderTable() {
-  $("#tbody").innerHTML = rows.slice().sort(compareRows).map(tableRow).join("");
+  // rows already arrive in sorted order from the server (see query()), so just render them.
+  $("#tbody").innerHTML = rows.map(tableRow).join("");
   for (const th of document.querySelectorAll("#table th[data-key]")) {
     const active = th.dataset.key === sortKey;
     th.classList.toggle("sorted", active);
