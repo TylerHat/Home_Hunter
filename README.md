@@ -81,7 +81,9 @@ All settings live in [config.yaml](config.yaml):
 
 ## Database schema
 
-- **`rentals`** — keyed by Craigslist `pid`; title, neighborhood, borough, rent,
+- **`rentals`** — keyed by Craigslist `pid`; title, neighborhood
+  (`neighborhood` = the source's free-text label, `neighborhood_key` = the
+  canonical neighborhood resolved from lat/long), borough, rent,
   beds, baths, sqft, housing type, text attributes (`laundry`, `parking`,
   `rent_period`), boolean amenity flags (`cats_ok`, `dogs_ok`, `furnished`,
   `no_smoking`, `wheelchair_accessible`, `air_conditioning`, `ev_charging`,
@@ -96,17 +98,25 @@ Each run upserts on `pid`: update existing, insert new, append rent history on c
 
 `uvicorn home_hunter.api.app:app --app-dir src` serves both a UI and a read API:
 
-- `GET /` — a self-contained web page (no build step) with a filter form and
-  listing cards. It calls the endpoints below.
-- `GET /rentals` — filter by `borough`, `min_rent`, `max_rent`, `min_beds`,
+- `GET /` — a self-contained web page (no build step) with a filter form,
+  listing cards/table, and an **Advanced Neighborhood Selection** map: click
+  "🗺️ Advanced Neighborhood Selection" next to Borough to open an interactive
+  map of NYC neighborhoods (rendered as inline SVG — no map library, works
+  offline), click neighborhoods like *Upper East Side*, *Williamsburg*, or
+  *Flatiron District* to toggle them, and the listing table/cards filter to that
+  selection. Shading shows how many listings each neighborhood has.
+- `GET /rentals` — filter by `borough`, `neighborhood` (repeatable — the map
+  filter; matches `neighborhood_key`), `min_rent`, `max_rent`, `min_beds`,
   `max_beds`, `min_sqft`, `housing_type`, `cats_ok`, `dogs_ok`, `no_fee`, with
   `limit`/`offset`. Results are ordered by rent ascending (nulls last).
 - `GET /rentals/{pid}` and `GET /rentals/{pid}/rent-history`.
-- `GET /stats` — totals, min/avg/max rent, and per-borough counts (powers the
-  UI header).
+- `GET /stats` — totals, min/avg/max rent, and per-borough + per-neighborhood
+  counts (powers the UI header and the map shading).
+- `GET /neighborhoods.geojson` — NYC neighborhood boundaries the map renders.
 - `GET /health`.
 
-The API is also the contract a richer future UI (map, score sorting) will call.
+The API is also the contract a richer future UI (listing map pins, score
+sorting) will call.
 
 ## Optional: run on GitHub instead of locally
 

@@ -1,10 +1,10 @@
 """Tests for upsert + rent-history logic using an in-memory SQLite DB."""
 
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.orm import sessionmaker
 
-from home_hunter.db import upsert_listing
+from home_hunter.db import _ensure_columns, upsert_listing
 from home_hunter.models import Base, Rental, RentHistory
 from home_hunter.scraper.craigslist.parse import RentalListing
 
@@ -56,3 +56,31 @@ def test_rent_change_appends_history(session):
         select(RentHistory).order_by(RentHistory.observed_at)
     ).all()
     assert [h.price for h in history] == [3000, 2850]
+
+
+def test_upsert_tags_neighborhood_key_from_coordinates(session):
+    # Coordinates in Williamsburg, Brooklyn — resolved via home_hunter.geo.
+    listing = RentalListing(
+        pid="222", title="Loft", borough="Brooklyn", price=3500,
+        latitude=40.7081, longitude=-73.9571,
+    )
+    upsert_listing(session, listing)
+    session.commit()
+    assert session.get(Rental, "222").neighborhood_key == "Williamsburg"
+
+
+def test_upsert_leaves_neighborhood_key_none_without_coordinates(session):
+    upsert_listing(session, _listing(3000))  # no lat/long
+    session.commit()
+    assert session.get(Rental, "111").neighborhood_key is None
+
+
+def test_ensure_columns_adds_missing_neighborhood_key():
+    # Simulate a DB created before the column existed: build the table without it.
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE rentals (pid VARCHAR PRIMARY KEY, price INTEGER)"))
+    _ensure_columns(engine)
+    cols = {c["name"] for c in inspect(engine).get_columns("rentals")}
+    assert "neighborhood_key" in cols
+    _ensure_columns(engine)  # idempotent — a second run must not error
