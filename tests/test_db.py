@@ -58,6 +58,45 @@ def test_rent_change_appends_history(session):
     assert [h.price for h in history] == [3000, 2850]
 
 
+def _repost(pid: str, title: str = "1BR in Astoria", price: int = 3000) -> RentalListing:
+    """A repost of ``_listing`` under a new pid (same fingerprint fields)."""
+    return RentalListing(
+        pid=pid, title=title, neighborhood="Astoria", borough="Queens",
+        price=price, beds=1, baths=1, cats_ok=True,
+    )
+
+
+def test_repost_under_new_pid_updates_existing_row(session):
+    upsert_listing(session, _listing(3000))  # pid 111
+    session.commit()
+    stats = upsert_listing(session, _repost("999"))  # same apartment, new pid
+    session.commit()
+    assert stats.duplicates_merged == 1 and stats.inserted == 0
+    # Only the original row survives; the repost did not create a second row.
+    assert len(session.scalars(select(Rental)).all()) == 1
+    assert session.get(Rental, "999") is None
+    assert session.get(Rental, "111") is not None
+
+
+def test_repost_carries_over_newest_url(session):
+    upsert_listing(session, _listing(3000))
+    session.commit()
+    fresh = _repost("999")
+    fresh.url = "https://example.com/que/apa/d/astoria/999.html"
+    upsert_listing(session, fresh)
+    session.commit()
+    assert session.get(Rental, "111").url == fresh.url
+
+
+def test_distinct_titles_are_not_merged(session):
+    upsert_listing(session, _listing(3000))
+    session.commit()
+    stats = upsert_listing(session, _repost("999", title="Different 1BR in Astoria"))
+    session.commit()
+    assert stats.inserted == 1 and stats.duplicates_merged == 0
+    assert len(session.scalars(select(Rental)).all()) == 2
+
+
 def test_upsert_tags_neighborhood_key_from_coordinates(session):
     # Coordinates in Williamsburg, Brooklyn — resolved via home_hunter.geo.
     listing = RentalListing(
@@ -83,4 +122,5 @@ def test_ensure_columns_adds_missing_neighborhood_key():
     _ensure_columns(engine)
     cols = {c["name"] for c in inspect(engine).get_columns("rentals")}
     assert "neighborhood_key" in cols
+    assert "dedup_key" in cols
     _ensure_columns(engine)  # idempotent — a second run must not error

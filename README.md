@@ -1,10 +1,12 @@
 # Home Hunter — NYC rental tracker
 
-Scrapes **NYC apartment rentals** from Craigslist into a structured, queryable
-database, run **locally on demand** and **100% free** — no accounts, no paid
-services. Captures rent, beds/baths, **square footage**, and **amenities**
-(laundry, parking, pets, no-fee), plus neighborhood, geolocation, and a
-rent-history trend. Ships with a **read API and a built-in web UI** to browse and
+Scrapes **NYC apartment rentals** from Craigslist into a structured, queryable,
+**de-duplicated** database, run **locally on demand** and **100% free** — no
+accounts, no paid services. Captures rent, beds/baths, **square footage**, and
+**amenities** (laundry, parking, pets, no-fee), plus neighborhood, geolocation,
+and a rent-history trend. Craigslist reposts of the same apartment (a fresh
+posting id every day or two) are folded into a single listing instead of piling
+up as duplicates. Ships with a **read API and a built-in web UI** to browse and
 filter listings; an optional manual cloud mode can run it off your home IP.
 
 > **Why Craigslist?** It has little bot detection, so the scraper needs **no

@@ -54,12 +54,13 @@ def run(
                 session.commit()
             total += stats
             logger.info(
-                "%s stored: +%d new, %d updated, %d rent changes",
-                config.area_name(area), stats.inserted, stats.updated, stats.price_changes,
+                "%s stored: +%d new, %d updated, %d reposts merged, %d rent changes",
+                config.area_name(area), stats.inserted, stats.updated,
+                stats.duplicates_merged, stats.price_changes,
             )
 
     logger.info(
-        "run complete: +%d new, %d updated, %d rent changes",
-        total.inserted, total.updated, total.price_changes,
+        "run complete: +%d new, %d updated, %d reposts merged, %d rent changes",
+        total.inserted, total.updated, total.duplicates_merged, total.price_changes,
     )
     return total

@@ -5,11 +5,11 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from . import geo
+from . import dedup, geo
 from .config import Config
 from .models import Base, Rental, RentHistory, utcnow
 from .scraper.craigslist.parse import RentalListing
@@ -55,6 +55,14 @@ def _ensure_columns(engine: Engine) -> None:
     if "neighborhood_key" not in columns:
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE rentals ADD COLUMN neighborhood_key VARCHAR(128)"))
+    if "dedup_key" not in columns:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE rentals ADD COLUMN dedup_key VARCHAR(40)"))
+    # Index the dedup lookup (idempotent; valid on both SQLite and Postgres).
+    with engine.begin() as conn:
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_rentals_dedup_key ON rentals (dedup_key)")
+        )
 
 
 def get_sessionmaker(engine: Engine) -> sessionmaker[Session]:
@@ -66,25 +74,64 @@ class UpsertStats:
     inserted: int = 0
     updated: int = 0
     price_changes: int = 0
+    duplicates_merged: int = 0  # reposts folded into an existing row by fingerprint
 
     def __add__(self, other: "UpsertStats") -> "UpsertStats":
         return UpsertStats(
             self.inserted + other.inserted,
             self.updated + other.updated,
             self.price_changes + other.price_changes,
+            self.duplicates_merged + other.duplicates_merged,
         )
 
 
+def _listing_dedup_key(listing: RentalListing) -> str | None:
+    return dedup.fingerprint(
+        title=listing.title,
+        price=listing.price,
+        beds=listing.beds,
+        borough=listing.borough,
+        source=listing.source,
+    )
+
+
+def _find_repost(session: Session, key: str | None) -> Rental | None:
+    """The existing row a fingerprint maps to (the most recently seen, if any)."""
+    if not key:
+        return None
+    stmt = (
+        select(Rental)
+        .where(Rental.dedup_key == key)
+        .order_by(Rental.last_seen.desc())
+        .limit(1)
+    )
+    return session.scalars(stmt).first()
+
+
 def upsert_listing(session: Session, listing: RentalListing) -> UpsertStats:
-    """Insert or update one rental; append rent history on a rent change."""
+    """Insert or update one rental; append rent history on a rent change.
+
+    A listing arriving under a new ``pid`` but matching an existing row's
+    fingerprint (see ``home_hunter.dedup``) is a Craigslist repost: it updates
+    that row in place — keeping its original ``pid`` as the stable internal key —
+    instead of creating a duplicate.
+    """
     stats = UpsertStats()
     now = utcnow()
+    key = _listing_dedup_key(listing)
+
+    # Resolve the target row: exact pid first, else a repost under a new pid.
     row = session.get(Rental, listing.pid)
+    is_repost = False
+    if row is None:
+        row = _find_repost(session, key)
+        is_repost = row is not None
 
     if row is None:
         row = Rental(pid=listing.pid, first_seen=now)
         for field in _RENTAL_FIELDS:
             setattr(row, field, getattr(listing, field))
+        row.dedup_key = key
         row.neighborhood_key = geo.neighborhood_for(row.latitude, row.longitude)
         row.raw = listing.raw
         row.last_seen = now
@@ -96,20 +143,26 @@ def upsert_listing(session: Session, listing: RentalListing) -> UpsertStats:
         stats.inserted += 1
         return stats
 
-    # Existing rental: detect a rent change before overwriting.
+    # Existing rental (same pid, or a repost matched by fingerprint): detect a
+    # rent change before overwriting. History is keyed to the surviving row's
+    # pid, not the (possibly different) incoming repost pid.
     if listing.price is not None and row.price != listing.price:
-        session.add(RentHistory(pid=listing.pid, price=listing.price, observed_at=now))
+        session.add(RentHistory(pid=row.pid, price=listing.price, observed_at=now))
         stats.price_changes += 1
 
     for field in _RENTAL_FIELDS:
         value = getattr(listing, field)
         if value is not None:
             setattr(row, field, value)
+    row.dedup_key = key or row.dedup_key
     row.neighborhood_key = geo.neighborhood_for(row.latitude, row.longitude)
     row.raw = listing.raw
     row.last_seen = now
     row.last_scraped = now
-    stats.updated += 1
+    if is_repost:
+        stats.duplicates_merged += 1
+    else:
+        stats.updated += 1
     return stats
 
 
