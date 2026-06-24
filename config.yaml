@@ -41,4 +41,5 @@ rate_limit:
   max_delay_seconds: 5       # random delay ceiling
   max_retries: 3             # retries on 403/429/5xx before skipping
   backoff_base_seconds: 4    # exponential backoff base
+  detail_concurrency: 4      # detail pages fetched in parallel (each worker keeps its own delay)
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"

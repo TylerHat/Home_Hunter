@@ -75,7 +75,9 @@ All settings live in [config.yaml](config.yaml):
 - `filters` — `min_rent`/`max_rent`, `min_beds`/`max_beds`, `cats_ok`/`dogs_ok`,
   and `max_pages` (search pages per borough, ~120 listings each).
 - `detail_fetch` — open each listing for sqft + amenities (`true`) or not (`false`).
-- `rate_limit` — delays, retries, backoff, and the request `user_agent`.
+- `rate_limit` — delays, retries, backoff, the request `user_agent`, and
+  `detail_concurrency` (detail pages fetched in parallel; each worker keeps its
+  own pacing, so a full detail run finishes ~Nx faster while staying polite).
 
 ## Database schema
 

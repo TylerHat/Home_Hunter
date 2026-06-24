@@ -51,6 +51,9 @@ class RateLimit:
     max_retries: int = 3
     backoff_base_seconds: float = 4.0
     user_agent: str = DEFAULT_USER_AGENT
+    # Detail pages fetched in parallel. Each worker keeps its own min/max
+    # pacing, so concurrency N ~= N x the aggregate request rate. Keep modest.
+    detail_concurrency: int = 4
 
 
 @dataclass(frozen=True)

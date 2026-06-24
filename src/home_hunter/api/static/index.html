@@ -67,6 +67,34 @@
   .empty { text-align: center; color: var(--muted); padding: 50px 20px; }
   .empty code { background: var(--panel2); padding: 2px 7px; border-radius: 6px; color: var(--text); }
   .more { display: flex; justify-content: center; margin-top: 22px; }
+
+  .viewbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 4px 2px 14px; }
+  .viewbar .count { margin: 0; }
+  .viewtoggle { display: flex; }
+  .viewtoggle button { border-radius: 0; }
+  .viewtoggle button:first-child { border-radius: 8px 0 0 8px; }
+  .viewtoggle button:last-child { border-radius: 0 8px 8px 0; border-left: 0; }
+  .viewtoggle button.active { background: var(--accent); color: #06121f; border-color: var(--accent); }
+
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  thead th {
+    background: var(--panel2); color: var(--muted); text-align: left; font-weight: 600;
+    padding: 10px 12px; white-space: nowrap; cursor: pointer; user-select: none;
+    border-bottom: 1px solid var(--line);
+  }
+  thead th:hover { color: var(--text); }
+  thead th.sorted { color: var(--accent); }
+  thead th.num { text-align: right; }
+  thead th .arrow { font-size: 10px; }
+  tbody td { padding: 9px 12px; border-bottom: 1px solid var(--line); }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr:hover { background: var(--panel); }
+  tbody td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tbody td.rentcell { color: var(--accent2); font-weight: 700; white-space: nowrap; }
+  tbody td.titlecell a { color: var(--text); text-decoration: none; }
+  tbody td.titlecell a:hover { color: var(--accent); }
+  tbody td.nowrap { white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -99,14 +127,30 @@
     </div>
   </form>
 
-  <div class="count" id="count"></div>
+  <div class="viewbar">
+    <div class="count" id="count"></div>
+    <div class="viewtoggle">
+      <button class="ghost active" id="viewCards" type="button">▦ Cards</button>
+      <button class="ghost" id="viewTable" type="button">▤ Table</button>
+    </div>
+  </div>
   <div class="grid" id="grid"></div>
+  <div class="tablewrap" id="tablewrap" style="display:none">
+    <table id="table">
+      <thead><tr></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
   <div class="more"><button class="ghost" id="loadmore" style="display:none">Load more</button></div>
 </main>
 
 <script>
 const PAGE = 60;
 let offset = 0, lastCount = 0;
+let rows = [];                     // every listing loaded so far (re-rendered on sort/toggle)
+let loaded = false;                // a fetch has completed at least once
+let view = "cards";                // "cards" | "table"
+let sortKey = "price", sortDir = "asc";
 
 const $ = (s) => document.querySelector(s);
 const fmt = (n) => n == null ? null : Number(n).toLocaleString();
@@ -160,19 +204,109 @@ function esc(s) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// ---- table view: columns + sorting (client-side, over the loaded rows) ----
+// tableRow() below renders cells in this same order; keep them in sync.
+const COLUMNS = [
+  { key: "price", label: "Rent", num: true },
+  { key: "title", label: "Title" },
+  { key: "beds", label: "Beds", num: true },
+  { key: "baths", label: "Baths", num: true },
+  { key: "sqft", label: "Sqft", num: true },
+  { key: "neighborhood", label: "Neighborhood" },
+  { key: "borough", label: "Borough" },
+  { key: "posted_at", label: "Posted", date: true },
+];
+
+function buildHeader() {
+  const tr = $("#table thead tr");
+  tr.innerHTML = COLUMNS.map((c) =>
+    `<th data-key="${c.key}" class="${c.num ? "num" : ""}">${esc(c.label)} <span class="arrow"></span></th>`
+  ).join("");
+  for (const th of tr.querySelectorAll("th[data-key]")) {
+    th.addEventListener("click", () => {
+      const key = th.dataset.key;
+      if (sortKey === key) sortDir = sortDir === "asc" ? "desc" : "asc";
+      else { sortKey = key; sortDir = "asc"; }
+      render();
+    });
+  }
+}
+
+function compareRows(a, b) {
+  const col = COLUMNS.find((c) => c.key === sortKey) || {};
+  let va = a[sortKey], vb = b[sortKey];
+  const na = va == null || va === "", nb = vb == null || vb === "";
+  if (na && nb) return 0;
+  if (na) return 1;                 // nulls always sort last, both directions
+  if (nb) return -1;
+  if (col.date) { va = new Date(va).getTime(); vb = new Date(vb).getTime(); }
+  else if (!col.num) { va = String(va).toLowerCase(); vb = String(vb).toLowerCase(); }
+  const d = va < vb ? -1 : va > vb ? 1 : 0;
+  return sortDir === "asc" ? d : -d;
+}
+
+function tableRow(r) {
+  const map = (r.latitude != null && r.longitude != null)
+    ? `<a class="maplink" target="_blank" href="https://www.google.com/maps?q=${r.latitude},${r.longitude}">📍</a>` : "";
+  const title = `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title || "(no title)")}</a>`;
+  const bedTxt = r.beds == null ? "—" : (r.beds === 0 ? "studio" : r.beds);
+  return `<tr>
+    <td class="num rentcell">${money(r.price)}</td>
+    <td class="titlecell">${title}</td>
+    <td class="num">${bedTxt}</td>
+    <td class="num">${r.baths == null ? "—" : r.baths}</td>
+    <td class="num">${r.sqft == null ? "—" : fmt(r.sqft)}</td>
+    <td>${esc(r.neighborhood || "—")}</td>
+    <td>${esc(r.borough || "—")}</td>
+    <td class="nowrap">${postedDate(r.posted_at) || "—"} ${map}</td>
+  </tr>`;
+}
+
+function renderTable() {
+  $("#tbody").innerHTML = rows.slice().sort(compareRows).map(tableRow).join("");
+  for (const th of document.querySelectorAll("#table th[data-key]")) {
+    const active = th.dataset.key === sortKey;
+    th.classList.toggle("sorted", active);
+    th.querySelector(".arrow").textContent = active ? (sortDir === "asc" ? "▲" : "▼") : "";
+  }
+}
+
+function emptyHTML() {
+  return `<div class="empty">No listings yet.<br>Run a scrape first:<br><br>
+    <code>python scripts/run_scrape.py --area mnh --once</code></div>`;
+}
+
+function render() {
+  $("#viewCards").classList.toggle("active", view === "cards");
+  $("#viewTable").classList.toggle("active", view === "table");
+  if (loaded && rows.length === 0) {
+    $("#grid").style.display = "grid";
+    $("#grid").innerHTML = emptyHTML();
+    $("#tablewrap").style.display = "none";
+    return;
+  }
+  if (view === "table") {
+    $("#grid").style.display = "none";
+    $("#tablewrap").style.display = "block";
+    renderTable();
+  } else {
+    $("#tablewrap").style.display = "none";
+    $("#grid").style.display = "grid";
+    $("#grid").innerHTML = rows.map(card).join("");
+  }
+}
+
 async function load(reset) {
-  if (reset) { offset = 0; $("#grid").innerHTML = ""; }
+  if (reset) { offset = 0; rows = []; }
   const res = await fetch("/rentals?" + query({ offset }));
-  const rows = await res.json();
-  lastCount = rows.length;
-  $("#grid").insertAdjacentHTML("beforeend", rows.map(card).join(""));
-  offset += rows.length;
+  const batch = await res.json();
+  lastCount = batch.length;
+  rows.push(...batch);
+  offset += batch.length;
+  loaded = true;
   $("#count").textContent = offset ? `Showing ${offset} listing${offset === 1 ? "" : "s"}` : "";
   $("#loadmore").style.display = lastCount === PAGE ? "inline-block" : "none";
-  if (reset && offset === 0) {
-    $("#grid").innerHTML = `<div class="empty">No listings yet.<br>Run a scrape first:<br><br>
-      <code>python scripts/run_scrape.py --area mnh --once</code></div>`;
-  }
+  render();
 }
 
 async function loadStats() {
@@ -189,7 +323,10 @@ $("#apply").addEventListener("click", () => load(true));
 $("#reset").addEventListener("click", () => { $("#filters").reset(); load(true); });
 $("#loadmore").addEventListener("click", () => load(false));
 $("#filters").addEventListener("submit", () => load(true));
+$("#viewCards").addEventListener("click", () => { view = "cards"; render(); });
+$("#viewTable").addEventListener("click", () => { view = "table"; render(); });
 
+buildHeader();
 loadStats();
 load(true);
 </script>
