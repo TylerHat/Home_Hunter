@@ -36,6 +36,19 @@ _ATTR_KEYS: dict[str, tuple[str, bool]] = {
     "ev_charging": ("ev_charging", True),
 }
 
+# Plausible monthly-rent bounds. Craigslist's "apartments for rent" section is
+# polluted with teaser/spam posts priced at $1–$50 (a trick to sort to the top,
+# with the real rent hidden in the body). Nothing legitimate in NYC falls below
+# a few hundred a month or above six figures.
+RENT_MIN = 300
+RENT_MAX = 100_000
+
+
+def plausible_rent(price: int | None) -> bool:
+    """True if a price looks like a real NYC monthly rent."""
+    return price is not None and RENT_MIN <= price <= RENT_MAX
+
+
 _PID_RE = re.compile(r"/(\d+)\.html")
 _ROW_RE = re.compile(r'<li class="cl-static-search-result".*?</li>', re.S)
 _ATTR_LINK_RE = re.compile(
@@ -108,10 +121,20 @@ def _clean(text: str | None) -> str | None:
 
 
 def _price_to_int(text: str | None) -> int | None:
+    """First integer in ``text``, tolerant of cents and thousands separators.
+
+    Handles both ``$3395.00`` (cents -> 3395) and ``$2.800`` / ``$2,800``
+    (thousands -> 2800): a trailing separator followed by exactly two digits is
+    treated as cents and dropped; any remaining ``,``/``.`` are separators.
+    """
     if not text:
         return None
-    digits = re.sub(r"[^\d]", "", text)
-    return int(digits) if digits else None
+    m = re.search(r"\d[\d.,]*", text)
+    if not m:
+        return None
+    num = re.sub(r"[.,]\d{2}$", "", m.group(0))   # drop trailing cents
+    num = num.replace(",", "").replace(".", "")   # remaining = thousands seps
+    return int(num) if num else None
 
 
 def _first(pattern: re.Pattern[str], text: str, group: int = 1) -> str | None:

@@ -17,6 +17,16 @@ from ...config import RateLimit
 
 logger = logging.getLogger(__name__)
 
+# Use the OS trust store (Windows/macOS) so a corporate TLS-inspection proxy —
+# whose root CA isn't in certifi's bundle — doesn't break HTTPS with
+# CERTIFICATE_VERIFY_FAILED. No-op if the optional `truststore` isn't installed.
+try:
+    import truststore as _truststore
+
+    _truststore.inject_into_ssl()
+except Exception:  # pragma: no cover - optional dependency / best effort
+    pass
+
 
 class BlockedError(RuntimeError):
     """Raised when Craigslist returns a hard block (403/429) after retries."""

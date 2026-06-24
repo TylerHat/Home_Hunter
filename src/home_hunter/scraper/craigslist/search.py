@@ -13,7 +13,13 @@ import logging
 
 from ...config import Config, Filters
 from .client import BlockedError, CraigslistClient
-from .parse import RentalListing, RentalSummary, parse_detail, parse_search_results
+from .parse import (
+    RentalListing,
+    RentalSummary,
+    parse_detail,
+    parse_search_results,
+    plausible_rent,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -118,5 +124,9 @@ def search_area(
             continue
         listings.append(parse_detail(detail_html, summary, borough=borough))
 
-    logger.info("%s: %d listings", borough, len(listings))
-    return listings
+    kept = [r for r in listings if plausible_rent(r.price)]
+    dropped = len(listings) - len(kept)
+    if dropped:
+        logger.info("%s: dropped %d listing(s) with implausible rent", borough, dropped)
+    logger.info("%s: %d listings", borough, len(kept))
+    return kept

@@ -6,8 +6,10 @@ import pytest
 
 from home_hunter.scraper.craigslist.parse import (
     RentalSummary,
+    _price_to_int,
     parse_detail,
     parse_search_results,
+    plausible_rent,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -77,6 +79,23 @@ def test_detail_absent_amenities_default_false(detail):
     # This listing advertises no EV charging / wheelchair access.
     assert detail.ev_charging is False
     assert detail.wheelchair_accessible is False
+
+
+def test_price_handles_cents_and_thousands_separators():
+    assert _price_to_int("$3395.00") == 3395    # cents -> dropped
+    assert _price_to_int("$3,850") == 3850      # US thousands
+    assert _price_to_int("$2.800") == 2800      # EU thousands
+    assert _price_to_int("$1,200.50") == 1200   # thousands + cents
+    assert _price_to_int("$2") == 2             # bare teaser price
+    assert _price_to_int("call for price") is None
+    assert _price_to_int(None) is None
+
+
+def test_plausible_rent_filters_spam():
+    assert plausible_rent(3850) is True
+    assert plausible_rent(2) is False           # teaser/spam
+    assert plausible_rent(339500) is False      # not a real rent
+    assert plausible_rent(None) is False
 
 
 def test_sqft_and_studio_parsing():

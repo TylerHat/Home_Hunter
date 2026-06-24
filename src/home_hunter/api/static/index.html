@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Home Hunter — NYC Rentals</title>
+<style>
+  :root {
+    --bg: #0f1216; --panel: #181d24; --panel2: #1f2630; --line: #2a313c;
+    --text: #e7edf3; --muted: #94a3b8; --accent: #4ea1ff; --accent2: #34d399;
+    --chip: #243042; --pet: #3b2f1a; --nofee: #14342a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  header {
+    padding: 18px 22px; border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, #141a21, #0f1216); position: sticky; top: 0; z-index: 5;
+  }
+  h1 { margin: 0; font-size: 20px; letter-spacing: .2px; }
+  h1 small { color: var(--muted); font-weight: 400; font-size: 13px; }
+  .stats { color: var(--muted); font-size: 13px; margin-top: 6px; }
+  .stats b { color: var(--text); }
+  main { max-width: 1200px; margin: 0 auto; padding: 18px 22px 60px; }
+
+  .filters {
+    display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    align-items: end; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 14px; margin-bottom: 18px;
+  }
+  .filters label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }
+  .filters input, .filters select {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 10px; font-size: 14px;
+  }
+  .checks { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+  .checks label { flex-direction: row; align-items: center; gap: 6px; color: var(--text); font-size: 13px; }
+  .actions { display: flex; gap: 10px; }
+  button {
+    background: var(--accent); color: #06121f; border: 0; border-radius: 8px;
+    padding: 9px 16px; font-weight: 600; font-size: 14px; cursor: pointer;
+  }
+  button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+  button:hover { filter: brightness(1.08); }
+
+  .count { color: var(--muted); font-size: 13px; margin: 4px 2px 14px; }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px; display: flex; flex-direction: column; gap: 8px;
+  }
+  .rent { font-size: 22px; font-weight: 700; color: var(--accent2); }
+  .rent span { font-size: 12px; color: var(--muted); font-weight: 400; }
+  .title { font-size: 14px; font-weight: 600; line-height: 1.35; }
+  .title a { color: var(--text); text-decoration: none; }
+  .title a:hover { color: var(--accent); }
+  .meta { color: var(--muted); font-size: 13px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+  .chip { font-size: 11.5px; background: var(--chip); color: #cdd9e8; border-radius: 999px; padding: 3px 9px; }
+  .chip.pet { background: var(--pet); color: #f5d8a0; }
+  .chip.nofee { background: var(--nofee); color: #8ff0c4; }
+  .foot { display: flex; justify-content: space-between; align-items: center; margin-top: auto; padding-top: 6px; }
+  .posted { color: var(--muted); font-size: 12px; }
+  .maplink { color: var(--accent); text-decoration: none; font-size: 12px; }
+  .empty { text-align: center; color: var(--muted); padding: 50px 20px; }
+  .empty code { background: var(--panel2); padding: 2px 7px; border-radius: 6px; color: var(--text); }
+  .more { display: flex; justify-content: center; margin-top: 22px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🏙️ Home Hunter <small>— NYC apartment rentals</small></h1>
+  <div class="stats" id="stats">Loading…</div>
+</header>
+
+<main>
+  <form class="filters" id="filters" onsubmit="return false">
+    <label>Borough
+      <select name="borough" id="borough">
+        <option value="">All boroughs</option>
+        <option>Manhattan</option><option>Brooklyn</option><option>Queens</option>
+        <option>Bronx</option><option>Staten Island</option>
+      </select>
+    </label>
+    <label>Min rent ($)<input type="number" name="min_rent" min="0" step="100" placeholder="0" /></label>
+    <label>Max rent ($)<input type="number" name="max_rent" min="0" step="100" placeholder="any" /></label>
+    <label>Min beds<input type="number" name="min_beds" min="0" step="1" placeholder="any" /></label>
+    <label>Min sqft<input type="number" name="min_sqft" min="0" step="50" placeholder="any" /></label>
+    <div class="checks">
+      <label><input type="checkbox" name="no_fee" /> No fee</label>
+      <label><input type="checkbox" name="cats_ok" /> Cats</label>
+      <label><input type="checkbox" name="dogs_ok" /> Dogs</label>
+    </div>
+    <div class="actions">
+      <button id="apply">Apply</button>
+      <button class="ghost" id="reset" type="button">Reset</button>
+    </div>
+  </form>
+
+  <div class="count" id="count"></div>
+  <div class="grid" id="grid"></div>
+  <div class="more"><button class="ghost" id="loadmore" style="display:none">Load more</button></div>
+</main>
+
+<script>
+const PAGE = 60;
+let offset = 0, lastCount = 0;
+
+const $ = (s) => document.querySelector(s);
+const fmt = (n) => n == null ? null : Number(n).toLocaleString();
+const money = (n) => n == null ? "—" : "$" + Number(n).toLocaleString();
+
+function beds(n) { return n == null ? null : (n === 0 ? "studio" : n + " bd"); }
+function postedDate(s) {
+  if (!s) return "";
+  const d = new Date(s);
+  return isNaN(d) ? "" : "posted " + d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function query(extra) {
+  const f = $("#filters");
+  const p = new URLSearchParams();
+  for (const el of f.elements) {
+    if (!el.name) continue;
+    if (el.type === "checkbox") { if (el.checked) p.set(el.name, "true"); }
+    else if (el.value !== "") p.set(el.name, el.value);
+  }
+  p.set("limit", PAGE);
+  p.set("offset", extra?.offset ?? 0);
+  return p.toString();
+}
+
+function card(r) {
+  const meta = [beds(r.beds), r.baths != null ? r.baths + " ba" : null,
+                r.sqft != null ? fmt(r.sqft) + " ft²" : null,
+                [r.neighborhood, r.borough].filter(Boolean).join(", ") || null]
+               .filter(Boolean).join(" · ");
+  const chips = [];
+  if (r.no_fee) chips.push(`<span class="chip nofee">no fee</span>`);
+  if (r.laundry) chips.push(`<span class="chip">${esc(r.laundry)}</span>`);
+  if (r.parking) chips.push(`<span class="chip">${esc(r.parking)}</span>`);
+  if (r.housing_type) chips.push(`<span class="chip">${esc(r.housing_type)}</span>`);
+  if (r.cats_ok) chips.push(`<span class="chip pet">cats</span>`);
+  if (r.dogs_ok) chips.push(`<span class="chip pet">dogs</span>`);
+  const map = (r.latitude != null && r.longitude != null)
+    ? `<a class="maplink" target="_blank" href="https://www.google.com/maps?q=${r.latitude},${r.longitude}">📍 map</a>` : "";
+  return `<article class="card">
+    <div class="rent">${money(r.price)} <span>/mo</span></div>
+    <div class="title"><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title || "(no title)")}</a></div>
+    <div class="meta">${esc(meta) || "—"}</div>
+    <div class="chips">${chips.join("")}</div>
+    <div class="foot"><span class="posted">${postedDate(r.posted_at)}</span>${map}</div>
+  </article>`;
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+async function load(reset) {
+  if (reset) { offset = 0; $("#grid").innerHTML = ""; }
+  const res = await fetch("/rentals?" + query({ offset }));
+  const rows = await res.json();
+  lastCount = rows.length;
+  $("#grid").insertAdjacentHTML("beforeend", rows.map(card).join(""));
+  offset += rows.length;
+  $("#count").textContent = offset ? `Showing ${offset} listing${offset === 1 ? "" : "s"}` : "";
+  $("#loadmore").style.display = lastCount === PAGE ? "inline-block" : "none";
+  if (reset && offset === 0) {
+    $("#grid").innerHTML = `<div class="empty">No listings yet.<br>Run a scrape first:<br><br>
+      <code>python scripts/run_scrape.py --area mnh --once</code></div>`;
+  }
+}
+
+async function loadStats() {
+  try {
+    const s = await (await fetch("/stats")).json();
+    if (!s.total) { $("#stats").textContent = "No data yet — run a scrape to populate the database."; return; }
+    const boroughs = Object.entries(s.by_borough).map(([b, c]) => `${b}: ${c}`).join("  ·  ");
+    $("#stats").innerHTML = `<b>${fmt(s.total)}</b> listings · rent <b>${money(s.rent.min)}</b>–<b>${money(s.rent.max)}</b>
+      (avg <b>${money(s.rent.avg)}</b>)<br>${esc(boroughs)}`;
+  } catch { $("#stats").textContent = ""; }
+}
+
+$("#apply").addEventListener("click", () => load(true));
+$("#reset").addEventListener("click", () => { $("#filters").reset(); load(true); });
+$("#loadmore").addEventListener("click", () => load(false));
+$("#filters").addEventListener("submit", () => load(true));
+
+loadStats();
+load(true);
+</script>
+</body>
+</html>

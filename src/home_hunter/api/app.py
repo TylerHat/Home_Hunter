@@ -8,11 +8,13 @@ Then browse the auto docs at http://127.0.0.1:8000/docs
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..config import load_config
@@ -20,6 +22,8 @@ from ..db import get_sessionmaker, init_db, make_engine
 from ..models import Rental, RentHistory
 
 app = FastAPI(title="Home Hunter — NYC Rentals API", version="0.2.0")
+
+_STATIC_DIR = Path(__file__).parent / "static"
 
 _engine = make_engine(load_config())
 init_db(_engine)
@@ -65,9 +69,37 @@ class RentHistoryOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+@app.get("/", response_class=HTMLResponse)
+def index() -> str:
+    """Serve the rental-browser web page."""
+    return (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/stats")
+def stats(session: Annotated[Session, Depends(get_session)]) -> dict:
+    """Summary counts for the page header."""
+    total = session.scalar(select(func.count()).select_from(Rental)) or 0
+    avg = session.scalar(select(func.avg(Rental.price)))
+    rows = session.execute(
+        select(Rental.borough, func.count())
+        .where(Rental.borough.is_not(None))
+        .group_by(Rental.borough)
+        .order_by(func.count().desc())
+    ).all()
+    return {
+        "total": total,
+        "rent": {
+            "min": session.scalar(select(func.min(Rental.price))),
+            "avg": round(avg) if avg is not None else None,
+            "max": session.scalar(select(func.max(Rental.price))),
+        },
+        "by_borough": {b: c for b, c in rows},
+    }
 
 
 @app.get("/rentals", response_model=list[RentalOut])
