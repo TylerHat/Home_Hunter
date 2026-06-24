@@ -71,6 +71,21 @@ class RentHistoryOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# Sortable columns exposed by GET /rentals. Keys match the table headers in the
+# web UI; text columns are lowered so the sort is case-insensitive, and the
+# neighborhood sort coalesces to the same value the UI displays.
+_SORT_COLUMNS = {
+    "price": Rental.price,
+    "title": func.lower(Rental.title),
+    "beds": Rental.beds,
+    "baths": Rental.baths,
+    "sqft": Rental.sqft,
+    "neighborhood": func.lower(func.coalesce(Rental.neighborhood_key, Rental.neighborhood)),
+    "borough": Rental.borough,
+    "posted_at": Rental.posted_at,
+}
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     """Serve the rental-browser web page."""
@@ -130,6 +145,8 @@ def list_rentals(
     cats_ok: bool | None = None,
     dogs_ok: bool | None = None,
     no_fee: bool | None = None,
+    sort: str = "price",
+    order: str = "asc",
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[Rental]:
@@ -156,7 +173,11 @@ def list_rentals(
         stmt = stmt.where(Rental.dogs_ok == dogs_ok)
     if no_fee is not None:
         stmt = stmt.where(Rental.no_fee == no_fee)
-    stmt = stmt.order_by(Rental.price.asc().nulls_last()).limit(limit).offset(offset)
+    col = _SORT_COLUMNS.get(sort, Rental.price)
+    ordering = col.desc() if order == "desc" else col.asc()
+    # pid is a stable tiebreaker so paging (offset/Load more) never skips or
+    # repeats rows that share a sort value.
+    stmt = stmt.order_by(ordering.nulls_last(), Rental.pid.asc()).limit(limit).offset(offset)
     return list(session.scalars(stmt).all())
 
 
