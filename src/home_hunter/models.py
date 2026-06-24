@@ -38,6 +38,12 @@ class Rental(Base):
     neighborhood_key: Mapped[str | None] = mapped_column(String(128), index=True)
     borough: Mapped[str | None] = mapped_column(String(64), index=True)
 
+    # Content fingerprint shared by Craigslist reposts of the same apartment
+    # (see home_hunter.dedup). Lets the upsert collapse a repost arriving under a
+    # new pid into the existing row instead of storing it again. NULL when a
+    # listing is too thin to fingerprint safely.
+    dedup_key: Mapped[str | None] = mapped_column(String(40), index=True)
+
     price: Mapped[int | None] = mapped_column(Integer, index=True)  # monthly rent USD
     beds: Mapped[float | None] = mapped_column(Float, index=True)
     baths: Mapped[float | None] = mapped_column(Float)
