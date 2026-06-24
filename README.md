@@ -8,8 +8,9 @@ and a rent-history trend. Craigslist reposts of the same apartment (a fresh
 posting id every day or two) are folded into a single listing instead of piling
 up as duplicates. Suspected **fake/scam listings are flagged** (most decisively,
 posts with **no photos**) so they're badged in the UI and can be filtered out.
-Ships with a **read API and a built-in web UI** to browse and filter listings; an
-optional manual cloud mode can run it off your home IP.
+Ships with a **read API and a built-in web UI** to browse and filter listings,
+plus an **Analytics tab** with average/median rent per neighborhood by bed-type;
+an optional manual cloud mode can run it off your home IP.
 
 > **Why Craigslist?** It has little bot detection, so the scraper needs **no
 > headless browser** — plain HTTP runs reliably on free CI runners. Zillow and
@@ -111,13 +112,18 @@ note the photo signal only applies to rows scraped since the feature landed.
 
 `uvicorn home_hunter.api.app:app --app-dir src` serves both a UI and a read API:
 
-- `GET /` — a self-contained web page (no build step) with a filter form,
-  listing cards/table, and an **Advanced Neighborhood Selection** map: click
-  "🗺️ Advanced Neighborhood Selection" next to Borough to open an interactive
-  map of NYC neighborhoods (rendered as inline SVG — no map library, works
-  offline), click neighborhoods like *Upper East Side*, *Williamsburg*, or
-  *Flatiron District* to toggle them, and the listing table/cards filter to that
-  selection. Shading shows how many listings each neighborhood has.
+- `GET /` — a self-contained web page (no build step) with two tabs:
+  - **Browse** — a filter form, listing cards/table, and an **Advanced
+    Neighborhood Selection** map: click "🗺️ Advanced Neighborhood Selection" next
+    to Borough to open an interactive map of NYC neighborhoods (rendered as inline
+    SVG — no map library, works offline), click neighborhoods like *Upper East
+    Side*, *Williamsburg*, or *Flatiron District* to toggle them, and the listing
+    table/cards filter to that selection. Shading shows how many listings each
+    neighborhood has.
+  - **Analytics** — a per-neighborhood rent table (average, median, price range
+    and listing count for studio / 1-bed / 2-bed, plus $/ft² and % no-fee) backed
+    by bar charts that compare neighborhoods for the chosen bed-type. Borough and
+    minimum-sample-size filters; suspected scams are excluded by default.
 - `GET /rentals` — filter by `borough`, `neighborhood` (repeatable — the map
   filter; matches `neighborhood_key`), `min_rent`, `max_rent`, `min_beds`,
   `max_beds`, `min_sqft`, `housing_type`, `cats_ok`, `dogs_ok`, `no_fee`, and
@@ -128,6 +134,10 @@ note the photo signal only applies to rows scraped since the feature landed.
 - `GET /rentals/{pid}` and `GET /rentals/{pid}/rent-history`.
 - `GET /stats` — totals, min/avg/max rent, and per-borough + per-neighborhood
   counts (powers the UI header and the map shading).
+- `GET /analytics/neighborhoods` — per-neighborhood rent stats bucketed by beds
+  (studio/1/2/3+): count, average, median, min, max, plus `ppsf` and
+  `no_fee_pct`. Optional `borough`, `min_listings`, and `include_flagged`
+  (flagged listings are excluded by default). Powers the Analytics tab.
 - `GET /neighborhoods.geojson` — NYC neighborhood boundaries the map renders.
 - `GET /health`.
 

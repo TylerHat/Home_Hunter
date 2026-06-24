@@ -18,6 +18,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import geo
+from ..analytics import RentalStatRow, neighborhood_rent_stats
 from ..config import load_config
 from ..db import get_sessionmaker, init_db, make_engine
 from ..models import Rental, RentHistory
@@ -131,6 +132,33 @@ def stats(session: Annotated[Session, Depends(get_session)]) -> dict:
         },
         "by_borough": {b: c for b, c in rows},
         "by_neighborhood": {n: c for n, c in nb_rows},
+    }
+
+
+@app.get("/analytics/neighborhoods")
+def analytics_neighborhoods(
+    session: Annotated[Session, Depends(get_session)],
+    borough: str | None = None,
+    min_listings: Annotated[int, Query(ge=1)] = 1,
+    include_flagged: bool = False,
+) -> dict:
+    """Per-neighborhood rent stats (studio/1/2/3+ averages, median, $/ft², …)."""
+    stmt = select(
+        Rental.neighborhood_key,
+        Rental.borough,
+        Rental.beds,
+        Rental.price,
+        Rental.sqft,
+        Rental.no_fee,
+    ).where(Rental.neighborhood_key.is_not(None), Rental.price.is_not(None))
+    if borough is not None:
+        stmt = stmt.where(Rental.borough == borough)
+    if not include_flagged:
+        stmt = stmt.where(Rental.flagged.is_(False))
+    rows = [RentalStatRow(*r) for r in session.execute(stmt).all()]
+    return {
+        "neighborhoods": neighborhood_rent_stats(rows, min_listings=min_listings),
+        "excluded_flagged": not include_flagged,
     }
 
 
