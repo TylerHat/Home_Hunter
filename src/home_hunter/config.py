@@ -14,6 +14,8 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
+from .flags import FlagSettings
+
 load_dotenv()  # read .env if present (no-op in CI where env is set directly)
 
 # Craigslist NYC sub-region codes -> display borough name.
@@ -64,6 +66,8 @@ class Config:
     areas: list[str] = field(default_factory=lambda: list(NYC_AREAS))
     filters: Filters = field(default_factory=Filters)
     rate_limit: RateLimit = field(default_factory=RateLimit)
+    # Scam / fake-listing heuristics (see home_hunter.flags).
+    flags: FlagSettings = field(default_factory=FlagSettings)
     # Data source. "craigslist" is the active backend; "zillow" is legacy
     # (kept under scraper/zillow/ but not wired into the default pipeline).
     source: str = "craigslist"
@@ -98,12 +102,14 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
     areas = [str(a).strip() for a in (data.get("areas") or list(NYC_AREAS))]
     filters = Filters(**(data.get("filters") or {}))
     rate_limit = RateLimit(**(data.get("rate_limit") or {}))
+    flag_settings = FlagSettings(**(data.get("flags") or {}))
 
     return Config(
         city=str(data.get("city", "newyork")).strip(),
         areas=areas,
         filters=filters,
         rate_limit=rate_limit,
+        flags=flag_settings,
         source=str(data.get("source", "craigslist")).strip(),
         detail_fetch=bool(data.get("detail_fetch", True)),
     )

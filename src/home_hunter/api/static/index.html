@@ -8,7 +8,7 @@
   :root {
     --bg: #0f1216; --panel: #181d24; --panel2: #1f2630; --line: #2a313c;
     --text: #e7edf3; --muted: #94a3b8; --accent: #4ea1ff; --accent2: #34d399;
-    --chip: #243042; --pet: #3b2f1a; --nofee: #14342a;
+    --chip: #243042; --pet: #3b2f1a; --nofee: #14342a; --scam: #3a1a1f;
   }
   * { box-sizing: border-box; }
   body {
@@ -61,6 +61,7 @@
   .chip { font-size: 11.5px; background: var(--chip); color: #cdd9e8; border-radius: 999px; padding: 3px 9px; }
   .chip.pet { background: var(--pet); color: #f5d8a0; }
   .chip.nofee { background: var(--nofee); color: #8ff0c4; }
+  .chip.scam { background: var(--scam); color: #ffb4b4; cursor: help; }
   .foot { display: flex; justify-content: space-between; align-items: center; margin-top: auto; padding-top: 6px; }
   .posted { color: var(--muted); font-size: 12px; }
   .maplink { color: var(--accent); text-decoration: none; font-size: 12px; }
@@ -176,6 +177,7 @@
       <label><input type="checkbox" name="no_fee" /> No fee</label>
       <label><input type="checkbox" name="cats_ok" /> Cats</label>
       <label><input type="checkbox" name="dogs_ok" /> Dogs</label>
+      <label><input type="checkbox" name="hide_flagged" /> Hide suspected scams</label>
     </div>
     <div class="actions">
       <button id="apply">Apply</button>
@@ -263,6 +265,7 @@ function card(r) {
                 [r.neighborhood_key || r.neighborhood, r.borough].filter(Boolean).join(", ") || null]
                .filter(Boolean).join(" · ");
   const chips = [];
+  if (r.flagged) chips.push(scamChip(r));
   if (r.no_fee) chips.push(`<span class="chip nofee">no fee</span>`);
   if (r.laundry) chips.push(`<span class="chip">${esc(r.laundry)}</span>`);
   if (r.parking) chips.push(`<span class="chip">${esc(r.parking)}</span>`);
@@ -278,6 +281,13 @@ function card(r) {
     <div class="chips">${chips.join("")}</div>
     <div class="foot"><span class="posted">${postedDate(r.posted_at)}</span>${map}</div>
   </article>`;
+}
+
+// Warning badge for a suspected-scam listing; the flag reasons (e.g. "no
+// photos") become its hover tooltip.
+function scamChip(r) {
+  const why = (r.flag_reasons && r.flag_reasons.length) ? r.flag_reasons.join(", ") : "suspicious";
+  return `<span class="chip scam" title="Possible scam — ${esc(why)}">⚠ possible scam</span>`;
 }
 
 function esc(s) {
@@ -318,7 +328,10 @@ function buildHeader() {
 function tableRow(r) {
   const map = (r.latitude != null && r.longitude != null)
     ? `<a class="maplink" target="_blank" href="https://www.google.com/maps?q=${r.latitude},${r.longitude}">📍</a>` : "";
-  const title = `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title || "(no title)")}</a>`;
+  const warn = r.flagged
+    ? `<span class="chip scam" title="Possible scam — ${esc((r.flag_reasons || []).join(", ") || "suspicious")}">⚠</span> `
+    : "";
+  const title = `${warn}<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title || "(no title)")}</a>`;
   const bedTxt = r.beds == null ? "—" : (r.beds === 0 ? "studio" : r.beds);
   return `<tr>
     <td class="num rentcell">${money(r.price)}</td>

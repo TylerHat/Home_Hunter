@@ -15,9 +15,6 @@
 ## 4 Create AI Agent that is a broker and rate this page | minor
 - need ai agent to add to todo list. 
 
-# 5 Delete duplicates | crit
-- duplicate entries are being made within the database. Need to delete these
-
 # Add Photos | med
 - look into the posibility of adding photos
 

@@ -35,6 +35,16 @@ source: craigslist
 # (laundry, parking, pets, no-fee). false = faster, but only search-page fields.
 detail_fetch: true
 
+# Scam / fake-listing heuristics. Listings are flagged (badged in the UI), never
+# dropped — use the UI "Hide suspected scams" toggle to filter them out. Photos
+# dominate: a listing with no photos trips the threshold on its own.
+flags:
+  enabled: true
+  threshold: 100            # risk score at/above this -> flagged
+  no_photo_weight: 100      # no photos alone reaches the threshold
+  market_ratio: 0.5         # flag if rent < 50% of its (borough, beds) median
+  min_cohort_size: 5        # ignore medians from cohorts smaller than this
+
 # Respectful-scraping knobs. Craigslist tolerates modest, paced access.
 rate_limit:
   min_delay_seconds: 2       # random delay floor between requests

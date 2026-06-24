@@ -5,7 +5,14 @@ from __future__ import annotations
 import logging
 
 from .config import Config, load_config
-from .db import UpsertStats, get_sessionmaker, init_db, make_engine, upsert_listings
+from .db import (
+    UpsertStats,
+    get_sessionmaker,
+    init_db,
+    make_engine,
+    recompute_market_flags,
+    upsert_listings,
+)
 from .scraper import build_client
 from .scraper.craigslist import RentalListing, search_area
 
@@ -18,7 +25,8 @@ def store_listings(config: Config, listings: list[RentalListing]) -> UpsertStats
     init_db(engine)
     Session = get_sessionmaker(engine)
     with Session() as session:
-        stats = upsert_listings(session, listings)
+        stats = upsert_listings(session, listings, config.flags)
+        recompute_market_flags(session, config.flags)
         session.commit()
     return stats
 
@@ -50,7 +58,7 @@ def run(
             if not listings:
                 continue
             with Session() as session:
-                stats = upsert_listings(session, listings)
+                stats = upsert_listings(session, listings, config.flags)
                 session.commit()
             total += stats
             logger.info(
@@ -58,6 +66,13 @@ def run(
                 config.area_name(area), stats.inserted, stats.updated,
                 stats.duplicates_merged, stats.price_changes,
             )
+
+    # Re-evaluate scam flags once the whole dataset is present, so the
+    # rent-vs-area-median signal sees accurate cohort medians.
+    with Session() as session:
+        flagged = recompute_market_flags(session, config.flags)
+        session.commit()
+    logger.info("scam flags: %d listing(s) flagged", flagged)
 
     logger.info(
         "run complete: +%d new, %d updated, %d reposts merged, %d rent changes",

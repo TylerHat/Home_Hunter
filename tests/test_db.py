@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.orm import sessionmaker
 
-from home_hunter.db import _ensure_columns, upsert_listing
+from home_hunter.db import _ensure_columns, recompute_market_flags, upsert_listing
 from home_hunter.models import Base, Rental, RentHistory
 from home_hunter.scraper.craigslist.parse import RentalListing
 
@@ -114,13 +114,58 @@ def test_upsert_leaves_neighborhood_key_none_without_coordinates(session):
     assert session.get(Rental, "111").neighborhood_key is None
 
 
-def test_ensure_columns_adds_missing_neighborhood_key():
-    # Simulate a DB created before the column existed: build the table without it.
+def test_upsert_flags_listing_without_photos(session):
+    listing = RentalListing(
+        pid="333", title="Bright 1BR in Astoria", borough="Queens",
+        price=3000, beds=1, image_count=0, latitude=40.7, longitude=-73.9,
+    )
+    upsert_listing(session, listing)
+    session.commit()
+    row = session.get(Rental, "333")
+    assert row.flagged is True
+    assert "no photos" in row.flag_reasons
+
+
+def test_upsert_does_not_flag_listing_with_photos(session):
+    listing = RentalListing(
+        pid="444", title="Bright 1BR in Astoria", borough="Queens",
+        price=3000, beds=1, image_count=6, latitude=40.7, longitude=-73.9,
+    )
+    upsert_listing(session, listing)
+    session.commit()
+    assert session.get(Rental, "444").flagged is False
+
+
+def test_recompute_market_flags_adds_below_median_signal(session):
+    # A full cohort of normal 1BRs plus one suspiciously cheap, photoless listing.
+    for i, price in enumerate([4000, 4100, 3900, 4200, 4050]):
+        upsert_listing(session, RentalListing(
+            pid=f"n{i}", title=f"1BR number {i}", borough="Queens",
+            price=price, beds=1, image_count=5, latitude=40.7, longitude=-73.9,
+        ))
+    upsert_listing(session, RentalListing(
+        pid="cheap", title="1BR steal in Astoria", borough="Queens",
+        price=1200, beds=1, image_count=0, latitude=40.7, longitude=-73.9,
+    ))
+    session.commit()
+
+    flagged = recompute_market_flags(session)
+    session.commit()
+
+    cheap = session.get(Rental, "cheap")
+    assert flagged == 1
+    assert cheap.flagged is True
+    assert {"no photos", "rent far below area median"} <= set(cheap.flag_reasons)
+    # The normal, photo-bearing listings stay clean.
+    assert session.get(Rental, "n0").flagged is False
+
+
+def test_ensure_columns_adds_missing_columns():
+    # Simulate a DB created before the columns existed: build a bare table.
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
     with engine.begin() as conn:
         conn.execute(text("CREATE TABLE rentals (pid VARCHAR PRIMARY KEY, price INTEGER)"))
     _ensure_columns(engine)
     cols = {c["name"] for c in inspect(engine).get_columns("rentals")}
-    assert "neighborhood_key" in cols
-    assert "dedup_key" in cols
+    assert {"neighborhood_key", "dedup_key", "image_count", "flagged", "flag_reasons"} <= cols
     _ensure_columns(engine)  # idempotent — a second run must not error

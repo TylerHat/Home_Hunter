@@ -75,6 +75,22 @@ def test_detail_no_fee_detected(detail):
     assert detail.no_fee is True
 
 
+def test_detail_counts_photos(detail):
+    # The fixture gallery holds 8 photos ("image 1 of 8").
+    assert detail.image_count == 8
+
+
+def test_detail_without_gallery_counts_zero_photos():
+    # A post with no gallery/slider markup -> 0 photos (a strong scam signal).
+    html = (
+        '<span id="titletextonly">Bare listing</span>'
+        '<span class="price">$2,500</span>'
+        '<span class="attr important">1BR / 1Ba</span>'
+    )
+    summary = RentalSummary(pid="9", url="https://newyork.craigslist.org/x/9.html")
+    assert parse_detail(html, summary).image_count == 0
+
+
 def test_detail_absent_amenities_default_false(detail):
     # This listing advertises no EV charging / wheelchair access.
     assert detail.ev_charging is False

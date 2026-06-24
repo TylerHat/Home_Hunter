@@ -6,8 +6,10 @@ accounts, no paid services. Captures rent, beds/baths, **square footage**, and
 **amenities** (laundry, parking, pets, no-fee), plus neighborhood, geolocation,
 and a rent-history trend. Craigslist reposts of the same apartment (a fresh
 posting id every day or two) are folded into a single listing instead of piling
-up as duplicates. Ships with a **read API and a built-in web UI** to browse and
-filter listings; an optional manual cloud mode can run it off your home IP.
+up as duplicates. Suspected **fake/scam listings are flagged** (most decisively,
+posts with **no photos**) so they're badged in the UI and can be filtered out.
+Ships with a **read API and a built-in web UI** to browse and filter listings; an
+optional manual cloud mode can run it off your home IP.
 
 > **Why Craigslist?** It has little bot detection, so the scraper needs **no
 > headless browser** — plain HTTP runs reliably on free CI runners. Zillow and
@@ -80,6 +82,9 @@ All settings live in [config.yaml](config.yaml):
 - `rate_limit` — delays, retries, backoff, the request `user_agent`, and
   `detail_concurrency` (detail pages fetched in parallel; each worker keeps its
   own pacing, so a full detail run finishes ~Nx faster while staying polite).
+- `flags` — scam-detection weights/thresholds (see below). Photos dominate:
+  `no_photo_weight` reaches `threshold` on its own, so a photoless post is
+  flagged. `market_ratio` flags rent far below its `(borough, beds)` median.
 
 ## Database schema
 
@@ -91,10 +96,16 @@ All settings live in [config.yaml](config.yaml):
   `no_smoking`, `wheelchair_accessible`, `air_conditioning`, `ev_charging`,
   `no_fee`), a catch-all `amenities` JSON list, lat/long, url,
   `posted_at`/`updated_at`, and `first_seen`/`last_seen`/`last_scraped`.
+  Scam-detection fields: `image_count` (photos on the detail page; `0` is the
+  strongest scam signal), `flagged`, and `flag_reasons` (e.g. `["no photos"]`).
 - **`rent_history`** — a row is appended only when a listing's rent changes, so the
   DB becomes a rent-trend analysis asset over time.
 
-Each run upserts on `pid`: update existing, insert new, append rent history on change.
+Each run upserts on `pid`: update existing, insert new, append rent history on
+change, and flag suspected scams (re-checked against area medians at the end of
+the run). Re-run scoring on stored rows with
+`python scripts/recompute_flags.py` (e.g. after tuning `flags:` thresholds);
+note the photo signal only applies to rows scraped since the feature landed.
 
 ## Web UI & query API
 
@@ -109,8 +120,11 @@ Each run upserts on `pid`: update existing, insert new, append rent history on c
   selection. Shading shows how many listings each neighborhood has.
 - `GET /rentals` — filter by `borough`, `neighborhood` (repeatable — the map
   filter; matches `neighborhood_key`), `min_rent`, `max_rent`, `min_beds`,
-  `max_beds`, `min_sqft`, `housing_type`, `cats_ok`, `dogs_ok`, `no_fee`, with
-  `limit`/`offset`. Results are ordered by rent ascending (nulls last).
+  `max_beds`, `min_sqft`, `housing_type`, `cats_ok`, `dogs_ok`, `no_fee`, and
+  `hide_flagged` (drop suspected scams), with `limit`/`offset`. Results are
+  ordered by rent ascending (nulls last). Each listing carries `image_count`,
+  `flagged`, and `flag_reasons`; the UI shows a **⚠ possible scam** badge and a
+  **Hide suspected scams** filter checkbox.
 - `GET /rentals/{pid}` and `GET /rentals/{pid}/rent-history`.
 - `GET /stats` — totals, min/avg/max rent, and per-borough + per-neighborhood
   counts (powers the UI header and the map shading).
