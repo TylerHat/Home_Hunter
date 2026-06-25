@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import queue
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import httpx
 
@@ -124,17 +124,25 @@ def fetch_details(
     config: Config,
     borough: str | None,
     make_client: Callable[[], CraigslistClient],
+    on_listing: Callable[[], None] | None = None,
 ) -> list[RentalListing]:
     """Enrich summaries via their detail pages, parallelizing politely.
 
     With ``detail_concurrency`` > 1, detail pages are fetched through a small
     pool of clients (each keeping its own pacing) so wall-time drops ~Nx while
     every connection still looks human-paced. ``make_client`` is the seam tests
-    use to inject offline fakes.
+    use to inject offline fakes. ``on_listing`` (optional) fires once per
+    enriched listing so callers can report scrape progress; result order is not
+    guaranteed when concurrent, which is fine for the downstream upsert.
     """
     workers = max(1, config.rate_limit.detail_concurrency)
     if workers == 1 or len(summaries) <= 1:
-        return [enrich(client, s, borough) for s in summaries]
+        out: list[RentalListing] = []
+        for s in summaries:
+            out.append(enrich(client, s, borough))
+            if on_listing is not None:
+                on_listing()
+        return out
 
     pool: queue.Queue[CraigslistClient] = queue.Queue()
     created = [make_client() for _ in range(workers)]
@@ -150,7 +158,14 @@ def fetch_details(
 
     try:
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            return list(executor.map(task, summaries))
+            future_to_index = {executor.submit(task, s): i for i, s in enumerate(summaries)}
+            by_index: dict[int, RentalListing] = {}
+            # Tick per completion (smooth progress) but reassemble in input order.
+            for future in as_completed(future_to_index):
+                by_index[future_to_index[future]] = future.result()
+                if on_listing is not None:
+                    on_listing()
+            return [by_index[i] for i in range(len(summaries))]
     finally:
         for c in created:
             c.close()
@@ -160,14 +175,28 @@ def search_area(
     client: CraigslistClient,
     config: Config,
     area: str,
+    on_event: Callable[[dict], None] | None = None,
 ) -> list[RentalListing]:
-    """Scrape one borough: collect summaries, then enrich via detail pages."""
+    """Scrape one borough: collect summaries, then enrich via detail pages.
+
+    ``on_event`` (optional) reports progress for the in-UI rescan: a
+    ``{"type": "summaries", "count": n}`` event once the per-borough total is
+    known (the progress-bar denominator), then one ``{"type": "listing"}`` event
+    per enriched listing.
+    """
     borough = config.area_name(area)
     logger.info("scraping %s (%s)", borough, area)
     summaries = collect_summaries(client, config.city, area, config.filters)
+    if on_event is not None:
+        on_event({"type": "summaries", "count": len(summaries)})
+    tick = (lambda: on_event({"type": "listing"})) if on_event is not None else None
 
     if not config.detail_fetch:
-        listings = [_summary_listing(s, borough) for s in summaries]
+        listings = []
+        for s in summaries:
+            listings.append(_summary_listing(s, borough))
+            if tick is not None:
+                tick()
     else:
         listings = fetch_details(
             client,
@@ -175,6 +204,7 @@ def search_area(
             config,
             borough,
             make_client=lambda: CraigslistClient(config.rate_limit),
+            on_listing=tick,
         )
 
     kept = [r for r in listings if plausible_rent(r.price)]

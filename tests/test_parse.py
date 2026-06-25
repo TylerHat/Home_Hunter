@@ -75,6 +75,45 @@ def test_detail_no_fee_detected(detail):
     assert detail.no_fee is True
 
 
+def test_detail_rent_stabilized_absent(detail):
+    # The fixture's title/body never mention rent stabilization.
+    assert detail.rent_stabilized is False
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "This is a rent stabilized unit.",
+        "Rent-Stabilized building, lease renews yearly.",
+        "rent stabilization applies to this apartment",
+        "A rare rent stable apartment!",
+    ],
+)
+def test_detail_rent_stabilized_detected(body):
+    html = (
+        '<span id="titletextonly">Nice 1BR</span>'
+        '<span class="price">$2,500</span>'
+        '<span class="attr important">1BR / 1Ba</span>'
+        f'<section id="postingbody">{body}</section>'
+    )
+    summary = RentalSummary(pid="42", url="https://newyork.craigslist.org/x/42.html")
+    listing = parse_detail(html, summary)
+    assert listing.rent_stabilized is True
+
+
+def test_detail_stable_rent_phrase_not_flagged():
+    # "the rent is stable" is a weaker, different claim — the words aren't
+    # adjacent, so the rent-stabilized marker must not trip.
+    html = (
+        '<span id="titletextonly">Nice 1BR</span>'
+        '<span class="price">$2,500</span>'
+        '<section id="postingbody">The rent is stable in this neighborhood.</section>'
+    )
+    summary = RentalSummary(pid="43", url="https://newyork.craigslist.org/x/43.html")
+    listing = parse_detail(html, summary)
+    assert listing.rent_stabilized is False
+
+
 def test_detail_counts_photos(detail):
     # The fixture gallery holds 8 photos ("image 1 of 8").
     assert detail.image_count == 8

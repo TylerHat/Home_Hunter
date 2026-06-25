@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 from statistics import median
 
-from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy import create_engine, delete, inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -23,7 +23,7 @@ _RENTAL_FIELDS = (
     "source", "title", "neighborhood", "borough", "price", "beds", "baths",
     "sqft", "housing_type", "laundry", "parking", "cats_ok", "dogs_ok",
     "furnished", "no_smoking", "wheelchair_accessible", "air_conditioning",
-    "ev_charging", "no_fee", "rent_period", "amenities", "image_count",
+    "ev_charging", "no_fee", "rent_stabilized", "rent_period", "amenities", "image_count",
     "latitude", "longitude", "url", "posted_at", "updated_at",
 )
 
@@ -34,6 +34,9 @@ def make_engine(config: Config) -> Engine:
     connect_args = {}
     if url.startswith("sqlite"):
         connect_args["check_same_thread"] = False
+        # Wait (rather than immediately erroring with "database is locked") when
+        # the API serves reads while a background rescan commits its writes.
+        connect_args["timeout"] = 30
     engine = create_engine(url, future=True, pool_pre_ping=True, connect_args=connect_args)
     return engine
 
@@ -71,6 +74,13 @@ def _ensure_columns(engine: Engine) -> None:
     if "flag_reasons" not in columns:
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE rentals ADD COLUMN flag_reasons JSON DEFAULT '[]'"))
+    # Rent-stabilized marker. Constant FALSE default backfills existing rows; the
+    # photo-style text signal needs a re-scrape to populate old rows.
+    if "rent_stabilized" not in columns:
+        with engine.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE rentals ADD COLUMN rent_stabilized BOOLEAN DEFAULT FALSE")
+            )
     # Index lookups used by dedup and the hide-flagged filter (idempotent; valid
     # on both SQLite and Postgres).
     with engine.begin() as conn:
@@ -79,6 +89,9 @@ def _ensure_columns(engine: Engine) -> None:
         )
         conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_rentals_flagged ON rentals (flagged)")
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_rentals_rent_stabilized ON rentals (rent_stabilized)")
         )
 
 
@@ -203,6 +216,19 @@ def upsert_listings(
     for listing in listings:
         total += upsert_listing(session, listing, settings)
     return total
+
+
+def clear_all(session: Session) -> int:
+    """Delete every rental and all rent history — a full reset.
+
+    Used by the in-UI "Rescan all listings" trigger, which wipes the database
+    before re-scraping from scratch. Returns the number of ``Rental`` rows
+    removed; the caller commits. ``RentHistory`` is cleared first so no orphan
+    history survives the wipe.
+    """
+    session.execute(delete(RentHistory))
+    result = session.execute(delete(Rental))
+    return result.rowcount or 0
 
 
 def recompute_market_flags(session: Session, settings: FlagSettings | None = None) -> int:

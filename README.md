@@ -95,7 +95,7 @@ All settings live in [config.yaml](config.yaml):
   beds, baths, sqft, housing type, text attributes (`laundry`, `parking`,
   `rent_period`), boolean amenity flags (`cats_ok`, `dogs_ok`, `furnished`,
   `no_smoking`, `wheelchair_accessible`, `air_conditioning`, `ev_charging`,
-  `no_fee`), a catch-all `amenities` JSON list, lat/long, url,
+  `no_fee`, `rent_stabilized`), a catch-all `amenities` JSON list, lat/long, url,
   `posted_at`/`updated_at`, and `first_seen`/`last_seen`/`last_scraped`.
   Scam-detection fields: `image_count` (photos on the detail page; `0` is the
   strongest scam signal), `flagged`, and `flag_reasons` (e.g. `["no photos"]`).
@@ -110,7 +110,8 @@ note the photo signal only applies to rows scraped since the feature landed.
 
 ## Web UI & query API
 
-`uvicorn home_hunter.api.app:app --app-dir src` serves both a UI and a read API:
+`uvicorn home_hunter.api.app:app --app-dir src` serves a UI and a query API
+(read-only apart from the `/rescan` trigger):
 
 - `GET /` — a self-contained web page (no build step) with two tabs:
   - **Browse** — a filter form, listing cards/table, and an **Advanced
@@ -124,13 +125,18 @@ note the photo signal only applies to rows scraped since the feature landed.
     and listing count for studio / 1-bed / 2-bed, plus $/ft² and % no-fee) backed
     by bar charts that compare neighborhoods for the chosen bed-type. Borough and
     minimum-sample-size filters; suspected scams are excluded by default.
+  - A header **🔄 Rescan all listings** button: after a confirmation it wipes the
+    database (all listings *and* rent history) and re-scrapes every borough in the
+    background, showing a live progress bar with a running count of listings
+    found, then refreshes the page when it finishes.
 - `GET /rentals` — filter by `borough`, `neighborhood` (repeatable — the map
   filter; matches `neighborhood_key`), `min_rent`, `max_rent`, `min_beds`,
   `max_beds`, `min_sqft`, `housing_type`, `cats_ok`, `dogs_ok`, `no_fee`, and
   `hide_flagged` (drop suspected scams), with `limit`/`offset`. Results are
   ordered by rent ascending (nulls last). Each listing carries `image_count`,
-  `flagged`, and `flag_reasons`; the UI shows a **⚠ possible scam** badge and a
-  **Hide suspected scams** filter checkbox.
+  `flagged`, `flag_reasons`, and `rent_stabilized`; the UI shows a **⚠ possible
+  scam** badge, a green **🟢 rent stabilized** badge, and a **Hide suspected
+  scams** filter checkbox.
 - `GET /rentals/{pid}` and `GET /rentals/{pid}/rent-history`.
 - `GET /stats` — totals, min/avg/max rent, and per-borough + per-neighborhood
   counts (powers the UI header and the map shading).
@@ -140,6 +146,10 @@ note the photo signal only applies to rows scraped since the feature landed.
   (flagged listings are excluded by default). Powers the Analytics tab.
 - `GET /neighborhoods.geojson` — NYC neighborhood boundaries the map renders.
 - `GET /health`.
+- `POST /rescan` — wipe the database and re-scrape every borough on a background
+  thread (returns `409` if one is already running); `GET /rescan/status` reports
+  live progress (`progress`, `found`, current borough). This is the only endpoint
+  that writes — everything else is read-only. Backs the **Rescan** button.
 
 The API is also the contract a richer future UI (listing map pins, score
 sorting) will call.
