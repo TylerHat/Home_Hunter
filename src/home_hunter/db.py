@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 from statistics import median
 
-from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy import create_engine, delete, inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -34,6 +34,9 @@ def make_engine(config: Config) -> Engine:
     connect_args = {}
     if url.startswith("sqlite"):
         connect_args["check_same_thread"] = False
+        # Wait (rather than immediately erroring with "database is locked") when
+        # the API serves reads while a background rescan commits its writes.
+        connect_args["timeout"] = 30
     engine = create_engine(url, future=True, pool_pre_ping=True, connect_args=connect_args)
     return engine
 
@@ -213,6 +216,19 @@ def upsert_listings(
     for listing in listings:
         total += upsert_listing(session, listing, settings)
     return total
+
+
+def clear_all(session: Session) -> int:
+    """Delete every rental and all rent history — a full reset.
+
+    Used by the in-UI "Rescan all listings" trigger, which wipes the database
+    before re-scraping from scratch. Returns the number of ``Rental`` rows
+    removed; the caller commits. ``RentHistory`` is cleared first so no orphan
+    history survives the wipe.
+    """
+    session.execute(delete(RentHistory))
+    result = session.execute(delete(Rental))
+    return result.rowcount or 0
 
 
 def recompute_market_flags(session: Session, settings: FlagSettings | None = None) -> int:

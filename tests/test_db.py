@@ -4,7 +4,12 @@ import pytest
 from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.orm import sessionmaker
 
-from home_hunter.db import _ensure_columns, recompute_market_flags, upsert_listing
+from home_hunter.db import (
+    _ensure_columns,
+    clear_all,
+    recompute_market_flags,
+    upsert_listing,
+)
 from home_hunter.models import Base, Rental, RentHistory
 from home_hunter.scraper.craigslist.parse import RentalListing
 
@@ -158,6 +163,26 @@ def test_recompute_market_flags_adds_below_median_signal(session):
     assert {"no photos", "rent far below area median"} <= set(cheap.flag_reasons)
     # The normal, photo-bearing listings stay clean.
     assert session.get(Rental, "n0").flagged is False
+
+
+def test_clear_all_wipes_rentals_and_history(session):
+    upsert_listing(session, _listing(3000))
+    upsert_listing(session, _listing(2850))  # rent change -> a second history row
+    upsert_listing(session, _repost("999", title="Different 1BR in Astoria"))
+    session.commit()
+    assert len(session.scalars(select(Rental)).all()) == 2
+    assert len(session.scalars(select(RentHistory)).all()) >= 1
+
+    deleted = clear_all(session)
+    session.commit()
+
+    assert deleted == 2
+    assert session.scalars(select(Rental)).all() == []
+    assert session.scalars(select(RentHistory)).all() == []
+
+
+def test_clear_all_on_empty_db_returns_zero(session):
+    assert clear_all(session) == 0
 
 
 def test_ensure_columns_adds_missing_columns():

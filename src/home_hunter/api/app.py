@@ -1,12 +1,16 @@
-"""Minimal read-only FastAPI over the scraped NYC rentals.
+"""FastAPI over the scraped NYC rentals.
 
-This is the backend seam the future search UI will consume. Run it with:
+Read-only query layer for the search UI, plus a single write/trigger endpoint —
+``POST /rescan`` — that wipes the database and re-scrapes in a background thread,
+with ``GET /rescan/status`` exposing live progress. Run it with:
     uvicorn home_hunter.api.app:app --reload --app-dir src
 Then browse the auto docs at http://127.0.0.1:8000/docs
 """
 
 from __future__ import annotations
 
+import logging
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
@@ -17,11 +21,13 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import geo
+from .. import geo, pipeline
 from ..analytics import RentalStatRow, neighborhood_rent_stats
 from ..config import load_config
-from ..db import get_sessionmaker, init_db, make_engine
-from ..models import Rental, RentHistory
+from ..db import clear_all, get_sessionmaker, init_db, make_engine
+from ..models import Rental, RentHistory, utcnow
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Home Hunter — NYC Rentals API", version="0.2.0")
 
@@ -35,6 +41,108 @@ _Session = get_sessionmaker(_engine)
 def get_session() -> Session:
     with _Session() as session:
         yield session
+
+
+# ---------------------------------------------------------------------------
+# Rescan job: a single, in-process background scrape with live progress.
+#
+# This is the one endpoint that mutates data. The app is a single-user local
+# tool, so one in-memory job record (guarded by a lock) is enough — there's no
+# need for a job queue or persistence. ``_rescan`` is the snapshot that
+# ``GET /rescan/status`` returns and the UI polls.
+# ---------------------------------------------------------------------------
+_rescan_lock = threading.Lock()
+_rescan_thread: threading.Thread | None = None
+
+
+def _idle_rescan_state() -> dict:
+    return {
+        "status": "idle",        # idle | running | done | error
+        "phase": None,           # deleting | scraping | finalizing | done
+        "deleted": 0,            # rows wiped before re-scraping
+        "found": 0,              # listings enriched so far (cumulative)
+        "current_area": None,
+        "areas_total": 0,
+        "areas_done": 0,
+        "area_total": None,      # listings in the current borough (denominator)
+        "area_found": 0,
+        "progress": 0.0,         # 0..1, derived for the progress bar
+        "error": None,
+        "started_at": None,
+        "finished_at": None,
+        "stats": None,           # UpsertStats summary once done
+    }
+
+
+_rescan: dict = _idle_rescan_state()
+
+
+def _recompute_progress(state: dict) -> None:
+    """Borough-weighted fraction, smoothed within a borough by its listing count."""
+    total = state["areas_total"] or 1
+    area_frac = 0.0
+    if state["area_total"]:
+        area_frac = min(state["area_found"] / state["area_total"], 1.0)
+    # Hold just below 1.0 until the run actually finishes.
+    state["progress"] = min((state["areas_done"] + area_frac) / total, 0.999)
+
+
+def _apply_rescan_event(event: dict) -> None:
+    """Fold one pipeline progress event into the shared rescan state."""
+    with _rescan_lock:
+        kind = event["type"]
+        if kind == "area_start":
+            _rescan["current_area"] = event["area"]
+            _rescan["areas_total"] = event["total"]
+            _rescan["area_total"] = None
+            _rescan["area_found"] = 0
+        elif kind == "summaries":
+            _rescan["area_total"] = event["count"]
+        elif kind == "listing":
+            _rescan["found"] += 1
+            _rescan["area_found"] += 1
+        elif kind == "area_done":
+            _rescan["areas_done"] += 1
+            _rescan["area_total"] = None
+            _rescan["area_found"] = 0
+        elif kind == "finalizing":
+            _rescan["phase"] = "finalizing"
+        _recompute_progress(_rescan)
+
+
+def _run_rescan() -> None:
+    """Wipe the DB, then re-scrape, updating ``_rescan`` as progress arrives."""
+    try:
+        config = load_config()
+        with _rescan_lock:
+            _rescan["phase"] = "deleting"
+            _rescan["areas_total"] = len(config.areas)
+        with _Session() as session:
+            deleted = clear_all(session)
+            session.commit()
+        with _rescan_lock:
+            _rescan["deleted"] = deleted
+            _rescan["phase"] = "scraping"
+
+        stats = pipeline.run(config, on_progress=_apply_rescan_event)
+
+        with _rescan_lock:
+            _rescan["status"] = "done"
+            _rescan["phase"] = "done"
+            _rescan["progress"] = 1.0
+            _rescan["finished_at"] = utcnow().isoformat()
+            _rescan["stats"] = {
+                "inserted": stats.inserted,
+                "updated": stats.updated,
+                "duplicates_merged": stats.duplicates_merged,
+                "price_changes": stats.price_changes,
+            }
+    except Exception as exc:  # surface failure to the UI rather than dying silently
+        logger.exception("rescan failed")
+        with _rescan_lock:
+            _rescan["status"] = "error"
+            _rescan["error"] = str(exc)
+            _rescan["finished_at"] = utcnow().isoformat()
 
 
 class RentalOut(BaseModel):
@@ -100,6 +208,33 @@ def index() -> str:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/rescan")
+def start_rescan() -> dict:
+    """Wipe the database and re-scrape every borough in a background thread.
+
+    Returns ``409`` if a rescan is already running. The UI then polls
+    ``GET /rescan/status`` for live progress.
+    """
+    global _rescan_thread
+    with _rescan_lock:
+        if _rescan["status"] == "running":
+            raise HTTPException(status_code=409, detail="rescan already running")
+        _rescan.clear()
+        _rescan.update(_idle_rescan_state())
+        _rescan["status"] = "running"
+        _rescan["started_at"] = utcnow().isoformat()
+    _rescan_thread = threading.Thread(target=_run_rescan, daemon=True)
+    _rescan_thread.start()
+    return {"status": "running"}
+
+
+@app.get("/rescan/status")
+def rescan_status() -> dict:
+    """Current rescan job snapshot (idle/running/done/error + progress)."""
+    with _rescan_lock:
+        return dict(_rescan)
 
 
 @app.get("/neighborhoods.geojson")

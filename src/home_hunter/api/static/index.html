@@ -24,6 +24,20 @@
   h1 small { color: var(--muted); font-weight: 400; font-size: 13px; }
   .stats { color: var(--muted); font-size: 13px; margin-top: 6px; }
   .stats b { color: var(--text); }
+  .headtop { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+  #rescanBtn { white-space: nowrap; flex: none; }
+  #rescanBtn:disabled { opacity: .55; cursor: progress; filter: none; }
+  .rescan-progress { margin-top: 10px; max-width: 520px; }
+  .rescan-progress .bar {
+    height: 8px; background: var(--panel2); border: 1px solid var(--line);
+    border-radius: 999px; overflow: hidden;
+  }
+  .rescan-progress .fill {
+    height: 100%; width: 0%; border-radius: 999px;
+    background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .4s ease;
+  }
+  .rescan-text { color: var(--muted); font-size: 12.5px; margin-top: 6px; }
+  .rescan-text.err { color: #f7a8b4; }
   main { max-width: 1200px; margin: 0 auto; padding: 18px 22px 60px; }
 
   .filters {
@@ -190,8 +204,17 @@
 </head>
 <body>
 <header>
-  <h1>🏙️ Home Hunter <small>— NYC apartment rentals</small></h1>
-  <div class="stats" id="stats">Loading…</div>
+  <div class="headtop">
+    <div>
+      <h1>🏙️ Home Hunter <small>— NYC apartment rentals</small></h1>
+      <div class="stats" id="stats">Loading…</div>
+    </div>
+    <button class="ghost" id="rescanBtn" type="button" title="Delete all listings and re-scrape Craigslist">🔄 Rescan all listings</button>
+  </div>
+  <div class="rescan-progress" id="rescanProgress" hidden>
+    <div class="bar"><div class="fill" id="rescanFill"></div></div>
+    <div class="rescan-text" id="rescanText"></div>
+  </div>
   <nav class="tabs">
     <button class="tab active" id="tabBrowse" type="button">Browse</button>
     <button class="tab" id="tabAnalytics" type="button">Analytics</button>
@@ -802,6 +825,93 @@ function switchTab(name) {
 $("#tabBrowse").addEventListener("click", () => switchTab("browse"));
 $("#tabAnalytics").addEventListener("click", () => switchTab("analytics"));
 $("#aApply").addEventListener("click", loadAnalytics);
+
+// ---- Rescan: wipe the DB and re-scrape, with a live progress bar ----
+let rescanTimer = null;
+
+async function startRescan() {
+  const ok = confirm(
+    "This deletes ALL current listings and rent history, then re-scrapes " +
+    "Craigslist (a few minutes). Continue?"
+  );
+  if (!ok) return;
+  $("#rescanBtn").disabled = true;
+  $("#rescanText").classList.remove("err");
+  $("#rescanProgress").hidden = false;
+  $("#rescanFill").style.width = "0%";
+  $("#rescanText").textContent = "Starting…";
+  try {
+    const res = await fetch("/rescan", { method: "POST" });
+    if (!res.ok && res.status !== 409) throw new Error("HTTP " + res.status);
+  } catch (e) {
+    $("#rescanBtn").disabled = false;
+    $("#rescanText").textContent = "Could not start rescan.";
+    $("#rescanText").classList.add("err");
+    return;
+  }
+  pollRescan();
+}
+
+function renderRescan(st) {
+  $("#rescanFill").style.width = Math.round((st.progress || 0) * 100) + "%";
+  let label;
+  if (st.phase === "deleting") {
+    label = "Clearing old listings…";
+  } else if (st.phase === "finalizing") {
+    label = `Finalizing — ${st.found} listing${st.found === 1 ? "" : "s"} found`;
+  } else if (st.current_area) {
+    label = `Scraping ${st.current_area} (${Math.min(st.areas_done + 1, st.areas_total)}/${st.areas_total})` +
+      ` — ${st.found} listing${st.found === 1 ? "" : "s"} found`;
+  } else {
+    label = `${st.found} listing${st.found === 1 ? "" : "s"} found`;
+  }
+  $("#rescanText").textContent = label;
+}
+
+async function pollRescan() {
+  let st;
+  try {
+    st = await (await fetch("/rescan/status")).json();
+  } catch {
+    rescanTimer = setTimeout(pollRescan, 2000);
+    return;
+  }
+  if (st.status === "running") {
+    renderRescan(st);
+    rescanTimer = setTimeout(pollRescan, 1500);
+    return;
+  }
+  // Terminal: done or error.
+  $("#rescanBtn").disabled = false;
+  if (st.status === "done") {
+    $("#rescanFill").style.width = "100%";
+    const n = st.stats ? st.stats.inserted : st.found;
+    $("#rescanText").textContent = `Done — ${n} listing${n === 1 ? "" : "s"} found.`;
+    analyticsLoaded = false;          // force the Analytics tab to refetch on next open
+    loadStats();
+    load(true);
+    setTimeout(() => { $("#rescanProgress").hidden = true; }, 5000);
+  } else if (st.status === "error") {
+    $("#rescanText").textContent = "Rescan failed: " + (st.error || "unknown error");
+    $("#rescanText").classList.add("err");
+  } else {
+    $("#rescanProgress").hidden = true;  // idle (nothing ran)
+  }
+}
+
+$("#rescanBtn").addEventListener("click", startRescan);
+
+// Resume the progress UI if a rescan is already running (e.g. page reloaded mid-scan).
+async function resumeRescan() {
+  try {
+    const st = await (await fetch("/rescan/status")).json();
+    if (st.status === "running") {
+      $("#rescanBtn").disabled = true;
+      $("#rescanProgress").hidden = false;
+      pollRescan();
+    }
+  } catch { /* ignore — button stays clickable */ }
+}
 for (const b of document.querySelectorAll("#chartBedsToggle button")) {
   b.addEventListener("click", () => {
     chartBeds = b.dataset.beds;
@@ -814,6 +924,7 @@ buildHeader();
 buildAHeader();
 loadStats();
 load(true);
+resumeRescan();
 </script>
 </body>
 </html>
