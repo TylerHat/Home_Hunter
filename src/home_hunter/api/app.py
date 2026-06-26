@@ -19,7 +19,7 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from .. import geo, pipeline
@@ -336,6 +336,7 @@ def analytics_neighborhoods(
 def list_rentals(
     session: Annotated[Session, Depends(get_session)],
     borough: str | None = None,
+    source: str | None = None,
     neighborhood: Annotated[list[str] | None, Query()] = None,
     min_rent: int | None = None,
     max_rent: int | None = None,
@@ -346,6 +347,7 @@ def list_rentals(
     cats_ok: bool | None = None,
     dogs_ok: bool | None = None,
     no_fee: bool | None = None,
+    rent_stabilized: bool = False,
     hide_flagged: bool = False,
     sort: str = "price",
     order: str = "asc",
@@ -355,6 +357,8 @@ def list_rentals(
     stmt = select(Rental)
     if borough is not None:
         stmt = stmt.where(Rental.borough == borough)
+    if source is not None:
+        stmt = stmt.where(Rental.source == source)
     if neighborhood:
         stmt = stmt.where(Rental.neighborhood_key.in_(neighborhood))
     if min_rent is not None:
@@ -375,6 +379,15 @@ def list_rentals(
         stmt = stmt.where(Rental.dogs_ok == dogs_ok)
     if no_fee is not None:
         stmt = stmt.where(Rental.no_fee == no_fee)
+    if rent_stabilized:
+        # Either the listing text advertises it or DHCR confirms it — matches the
+        # green badge the UI shows for the same condition.
+        stmt = stmt.where(
+            or_(
+                Rental.rent_stabilized.is_(True),
+                Rental.rent_stabilized_confirmed.is_(True),
+            )
+        )
     if hide_flagged:
         stmt = stmt.where(Rental.flagged.is_(False))
     col = _SORT_COLUMNS.get(sort, Rental.price)

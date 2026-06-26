@@ -167,15 +167,17 @@ the address→BBL geocode hits the network, at scrape time.
     turn — Craigslist, then RentHop** — across every borough in the background,
     showing a live progress bar that names the source it's currently pulling from
     plus a running count of listings found, then refreshes the page when done.
-- `GET /rentals` — filter by `borough`, `neighborhood` (repeatable — the map
-  filter; matches `neighborhood_key`), `min_rent`, `max_rent`, `min_beds`,
-  `max_beds`, `min_sqft`, `housing_type`, `cats_ok`, `dogs_ok`, `no_fee`, and
-  `hide_flagged` (drop suspected scams), with `limit`/`offset`. Results are
-  ordered by rent ascending (nulls last). Each listing carries `image_count`,
-  `flagged`, `flag_reasons`, `rent_stabilized`, and `rent_stabilized_confirmed`;
-  the UI shows a **⚠ possible scam** badge, a green **🟢 rent stabilized** badge
-  (solid when DHCR-confirmed, outline when only text-claimed), and a **Hide
-  suspected scams** filter checkbox.
+- `GET /rentals` — filter by `borough`, `source` (`craigslist`/`renthop`),
+  `neighborhood` (repeatable — the map filter; matches `neighborhood_key`),
+  `min_rent`, `max_rent`, `min_beds`, `max_beds`, `min_sqft`, `housing_type`,
+  `cats_ok`, `dogs_ok`, `no_fee`, `rent_stabilized` (only stabilized units —
+  advertised or DHCR-confirmed), and `hide_flagged` (drop suspected scams), with
+  `limit`/`offset`. Results are ordered by rent ascending (nulls last). Each
+  listing carries `image_count`, `flagged`, `flag_reasons`, `rent_stabilized`, and
+  `rent_stabilized_confirmed`; the UI shows a **⚠ possible scam** badge, a green
+  **🟢 rent stabilized** badge (solid when DHCR-confirmed, outline when only
+  text-claimed), and **Source**, **Rent stabilized**, and **Hide suspected scams**
+  filter controls.
 - `GET /rentals/{pid}` and `GET /rentals/{pid}/rent-history`.
 - `GET /stats` — totals, min/avg/max rent, and per-borough + per-neighborhood
   counts (powers the UI header and the map shading).

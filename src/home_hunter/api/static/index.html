@@ -232,6 +232,13 @@
         <option>Bronx</option><option>Staten Island</option>
       </select>
     </label>
+    <label>Source
+      <select name="source" id="source">
+        <option value="">All sources</option>
+        <option value="craigslist">Craigslist</option>
+        <option value="renthop">RentHop</option>
+      </select>
+    </label>
     <div class="nbhd-cell">
       <span class="cap">Neighborhoods</span>
       <button class="ghost" id="openMap" type="button">🗺️ Advanced Neighborhood Selection</button>
@@ -242,6 +249,7 @@
     <label>Min sqft<input type="number" name="min_sqft" min="0" step="50" placeholder="any" /></label>
     <div class="checks">
       <label><input type="checkbox" name="no_fee" /> No fee</label>
+      <label><input type="checkbox" name="rent_stabilized" /> Rent stabilized</label>
       <label><input type="checkbox" name="cats_ok" /> Cats</label>
       <label><input type="checkbox" name="dogs_ok" /> Dogs</label>
       <label><input type="checkbox" name="hide_flagged" /> Hide suspected scams</label>
