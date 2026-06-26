@@ -50,9 +50,14 @@ def test_status_is_idle_before_any_run(app_module):
         assert st["progress"] == 0.0
 
 
-def test_rescan_runs_and_reports_progress(app_module, monkeypatch):
+def test_rescan_sweeps_every_source_in_order(app_module, monkeypatch):
+    from home_hunter.scraper import ACTIVE_SOURCES
+
+    seen_sources: list[str] = []
+
     def fake_run(config, *, only_area=None, on_progress=None):
         assert on_progress is not None
+        seen_sources.append(config.source)  # rescan drives one run per source
         on_progress({"type": "area_start", "area": "Manhattan", "index": 0, "total": 1})
         on_progress({"type": "summaries", "area": "Manhattan", "count": 3})
         for _ in range(3):
@@ -68,12 +73,17 @@ def test_rescan_runs_and_reports_progress(app_module, monkeypatch):
         assert client.post("/rescan").json() == {"status": "running"}
         st = _wait_for(client, lambda s: s["status"] in ("done", "error"))
 
+    n = len(ACTIVE_SOURCES)
+    assert seen_sources == list(ACTIVE_SOURCES)  # Craigslist first, then RentHop, …
     assert st["status"] == "done"
     assert st["progress"] == 1.0
-    assert st["found"] == 3
+    assert st["sources_total"] == n
+    assert st["current_source"] == ACTIVE_SOURCES[-1]
+    # Counts accumulate across every source; the wipe happens once.
+    assert st["found"] == 3 * n
     assert st["deleted"] == 7
-    assert st["stats"]["inserted"] == 3
-    assert st["stats"]["updated"] == 1
+    assert st["stats"]["inserted"] == 3 * n
+    assert st["stats"]["updated"] == 1 * n
 
 
 def test_second_rescan_while_running_returns_409(app_module, monkeypatch):

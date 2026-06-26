@@ -70,6 +70,10 @@ class Rental(Base):
     # True when the listing text advertises a rent-stabilized unit (parsed from
     # title/body in the scraper). Badged green in the UI; never drops a listing.
     rent_stabilized: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # Authoritative DHCR confirmation resolved from the listing's street address
+    # (see home_hunter.rentstab). True/False when resolved; NULL = unknown (no
+    # address to geocode, e.g. Craigslist). Drives the solid vs. outline badge.
+    rent_stabilized_confirmed: Mapped[bool | None] = mapped_column(Boolean, index=True)
     rent_period: Mapped[str | None] = mapped_column(String(32))
     # Catch-all list of raw amenity labels not promoted to their own column.
     amenities: Mapped[list] = mapped_column(JSON, default=list)

@@ -1,30 +1,35 @@
 # Home Hunter — NYC rental tracker
 
-Scrapes **NYC apartment rentals** from Craigslist into a structured, queryable,
-**de-duplicated** database, run **locally on demand** and **100% free** — no
-accounts, no paid services. Captures rent, beds/baths, **square footage**, and
+Scrapes **NYC apartment rentals** from Craigslist and RentHop into a structured,
+queryable, **de-duplicated** database, run **locally on demand** and **100% free**
+— no accounts, no paid services. Captures rent, beds/baths, **square footage**, and
 **amenities** (laundry, parking, pets, no-fee), plus neighborhood, geolocation,
 and a rent-history trend. Craigslist reposts of the same apartment (a fresh
 posting id every day or two) are folded into a single listing instead of piling
 up as duplicates. Suspected **fake/scam listings are flagged** (most decisively,
 posts with **no photos**) so they're badged in the UI and can be filtered out.
-Ships with a **read API and a built-in web UI** to browse and filter listings,
-plus an **Analytics tab** with average/median rent per neighborhood by bed-type;
-an optional manual cloud mode can run it off your home IP.
+**Rent-stabilized status is confirmed** against NY State's DHCR building list (via
+the free NYC GeoSearch geocoder) — a solid green badge, not just the listing's
+word for it. Ships with a **read API and a built-in web UI** to browse and filter
+listings, plus an **Analytics tab** with average/median rent per neighborhood by
+bed-type; an optional manual cloud mode can run it off your home IP.
 
-> **Why Craigslist?** It has little bot detection, so the scraper needs **no
-> headless browser** — plain HTTP runs reliably on free CI runners. Zillow and
-> StreetEasy have the richest NYC data but use aggressive PerimeterX protection
-> that blocks free datacenter IPs. The scraping layer is isolated, so another
-> source can be added later without touching the DB, pipeline, or API. The legacy
-> Zillow scraper is kept under [src/home_hunter/scraper/zillow/](src/home_hunter/scraper/zillow/).
+> **Why Craigslist + RentHop?** Both work over **plain HTTP with no headless
+> browser**, so the scraper runs reliably on free CI runners. Craigslist has little
+> bot detection; RentHop sits behind Cloudflare, which a real Chrome TLS
+> fingerprint (curl_cffi impersonation) clears — still no browser. Zillow and
+> StreetEasy have rich NYC data but use aggressive PerimeterX protection that
+> blocks free datacenter IPs and needs a browser, so they're out. The scraping
+> layer is isolated behind `build_client()` + a `search_area` dispatcher, so each
+> source is a self-contained `scraper/<source>/` package; the legacy Zillow scraper
+> is kept under [src/home_hunter/scraper/zillow/](src/home_hunter/scraper/zillow/).
 
 ## How the constraints are met
 
 | Constraint | How |
 |---|---|
-| 100% free | Local **SQLite** + open-source libs. No paid proxies, APIs, or databases. |
-| Reliable | Craigslist needs no browser — just polite, paced HTTP with retries + exponential backoff. |
+| 100% free | Local **SQLite** + open-source libs. No paid proxies, APIs, or databases. The rent-stabilized confirmation uses the free, key-less NYC GeoSearch geocoder. |
+| Reliable | Neither active source needs a browser — just polite, paced HTTP with retries + exponential backoff (RentHop adds curl_cffi Chrome TLS impersonation to clear Cloudflare). |
 | Run off my IP (optional) | A manual GitHub Actions workflow can run the scrape on Microsoft-hosted runners. Local on-demand runs use your own IP, which is fine for Craigslist's light protection at modest volume. |
 
 ## Architecture
@@ -33,9 +38,10 @@ an optional manual cloud mode can run it off your home IP.
 Local CLI, on demand   (optional: manual GitHub Actions)
    └─ scripts/run_scrape.py
         └─ home_hunter.pipeline.run()
-             ├─ scraper.build_client()              # CraigslistClient (HTTP)
-             ├─ scraper.craigslist.search_area()    # search pages -> detail pages
-             │     └─ scraper.craigslist.parse      # HTML -> pydantic RentalListing
+             ├─ scraper.build_client()              # Craigslist (HTTP) or RentHop (curl_cffi)
+             ├─ scraper.search_area()               # dispatches to the configured source
+             │     └─ scraper.<source>.parse        # HTML -> pydantic RentalListing
+             ├─ rentstab.geocode.enrich_listings()  # address -> BBL -> DHCR confirmation
              └─ db.upsert_listings()                # upsert by pid + rent history
                    └─ Neon Postgres (or SQLite)
                          ▲
@@ -43,9 +49,11 @@ Local CLI, on demand   (optional: manual GitHub Actions)
                                └─ api/static/index.html  ← built-in web UI at /
 ```
 
-Per borough: page through `/search/<area>/apa` (apartments for rent), then open
-each listing's detail page to capture square footage + amenities. Set
-`detail_fetch: false` to skip detail pages (search-page fields only — much faster).
+The active source is set by `source:` in [config.yaml](config.yaml) (`craigslist`
+or `renthop`); both honor the same `areas` (boroughs) and `filters`. Craigslist
+pages through `/search/<area>/apa` and opens each detail page for sqft + amenities
+(`detail_fetch: false` skips that); RentHop reads everything from its per-borough
+results cards, so it needs no detail fetch.
 
 ## Quick start (local)
 
@@ -75,7 +83,9 @@ can try everything with zero setup. Set `DATABASE_URL` to use Neon Postgres.
 
 All settings live in [config.yaml](config.yaml):
 
-- `areas` — Craigslist NYC borough codes: `mnh` (Manhattan), `brk` (Brooklyn),
+- `source` — `craigslist` (default) or `renthop`. Both are free, browser-less,
+  and honor the same `areas` + `filters`.
+- `areas` — NYC borough codes: `mnh` (Manhattan), `brk` (Brooklyn),
   `que` (Queens), `brx` (Bronx), `stn` (Staten Island).
 - `filters` — `min_rent`/`max_rent`, `min_beds`/`max_beds`, `cats_ok`/`dogs_ok`,
   and `max_pages` (search pages per borough, ~120 listings each).
@@ -86,6 +96,9 @@ All settings live in [config.yaml](config.yaml):
 - `flags` — scam-detection weights/thresholds (see below). Photos dominate:
   `no_photo_weight` reaches `threshold` on its own, so a photoless post is
   flagged. `market_ratio` flags rent far below its `(borough, beds)` median.
+- `rent_stab_confirm` — confirm rent-stabilized status against DHCR by geocoding
+  each address-bearing listing (`true`, default). Only affects sources that carry
+  a street address (RentHop); a no-op for Craigslist. See below.
 
 ## Database schema
 
@@ -95,8 +108,12 @@ All settings live in [config.yaml](config.yaml):
   beds, baths, sqft, housing type, text attributes (`laundry`, `parking`,
   `rent_period`), boolean amenity flags (`cats_ok`, `dogs_ok`, `furnished`,
   `no_smoking`, `wheelchair_accessible`, `air_conditioning`, `ev_charging`,
-  `no_fee`, `rent_stabilized`), a catch-all `amenities` JSON list, lat/long, url,
+  `no_fee`, `rent_stabilized`, `rent_stabilized_confirmed`), a catch-all
+  `amenities` JSON list, lat/long, url,
   `posted_at`/`updated_at`, and `first_seen`/`last_seen`/`last_scraped`.
+  `rent_stabilized` is the listing's own text claim; `rent_stabilized_confirmed`
+  is the authoritative DHCR answer (True/False when the address geocoded to a BBL,
+  else NULL) — see [Rent-stabilized confirmation](#rent-stabilized-confirmation).
   Scam-detection fields: `image_count` (photos on the detail page; `0` is the
   strongest scam signal), `flagged`, and `flag_reasons` (e.g. `["no photos"]`).
 - **`rent_history`** — a row is appended only when a listing's rent changes, so the
@@ -107,6 +124,26 @@ change, and flag suspected scams (re-checked against area medians at the end of
 the run). Re-run scoring on stored rows with
 `python scripts/recompute_flags.py` (e.g. after tuning `flags:` thresholds);
 note the photo signal only applies to rows scraped since the feature landed.
+
+## Rent-stabilized confirmation
+
+NYC rent stabilization (capped, renewable rent) is valuable, and listings often
+claim it loosely — or omit it. Home Hunter cross-checks the claim against the
+**authoritative** record: NY State DHCR's list of buildings with rent-stabilized
+units, keyed by **BBL** (Borough-Block-Lot). During a scrape, each listing with a
+real street address (RentHop) is geocoded to a BBL via the free, key-less
+[NYC GeoSearch](https://geosearch.planninglabs.nyc) API, then looked up in the
+bundled BBL set ([src/home_hunter/rentstab/](src/home_hunter/rentstab/)):
+
+- `rent_stabilized_confirmed = true` — the building is DHCR-registered (solid 🟢 badge).
+- `= false` — it resolved to a building with no DHCR-stabilized units.
+- `= NULL` — unknown: no street address (e.g. Craigslist) or it didn't geocode.
+  The listing keeps the text-only `rent_stabilized` signal (outline 🟢 badge).
+
+The BBL set is **git-committed and offline** (so scrapes and tests need no
+network for the lookup itself). Refresh its vintage with
+`python scripts/refresh_rentstab.py`. The lookup module is pure and offline; only
+the address→BBL geocode hits the network, at scrape time.
 
 ## Web UI & query API
 
@@ -126,17 +163,19 @@ note the photo signal only applies to rows scraped since the feature landed.
     by bar charts that compare neighborhoods for the chosen bed-type. Borough and
     minimum-sample-size filters; suspected scams are excluded by default.
   - A header **🔄 Rescan all listings** button: after a confirmation it wipes the
-    database (all listings *and* rent history) and re-scrapes every borough in the
-    background, showing a live progress bar with a running count of listings
-    found, then refreshes the page when it finishes.
+    database (all listings *and* rent history) and re-scrapes **every source in
+    turn — Craigslist, then RentHop** — across every borough in the background,
+    showing a live progress bar that names the source it's currently pulling from
+    plus a running count of listings found, then refreshes the page when done.
 - `GET /rentals` — filter by `borough`, `neighborhood` (repeatable — the map
   filter; matches `neighborhood_key`), `min_rent`, `max_rent`, `min_beds`,
   `max_beds`, `min_sqft`, `housing_type`, `cats_ok`, `dogs_ok`, `no_fee`, and
   `hide_flagged` (drop suspected scams), with `limit`/`offset`. Results are
   ordered by rent ascending (nulls last). Each listing carries `image_count`,
-  `flagged`, `flag_reasons`, and `rent_stabilized`; the UI shows a **⚠ possible
-  scam** badge, a green **🟢 rent stabilized** badge, and a **Hide suspected
-  scams** filter checkbox.
+  `flagged`, `flag_reasons`, `rent_stabilized`, and `rent_stabilized_confirmed`;
+  the UI shows a **⚠ possible scam** badge, a green **🟢 rent stabilized** badge
+  (solid when DHCR-confirmed, outline when only text-claimed), and a **Hide
+  suspected scams** filter checkbox.
 - `GET /rentals/{pid}` and `GET /rentals/{pid}/rent-history`.
 - `GET /stats` — totals, min/avg/max rent, and per-borough + per-neighborhood
   counts (powers the UI header and the map shading).
@@ -146,10 +185,11 @@ note the photo signal only applies to rows scraped since the feature landed.
   (flagged listings are excluded by default). Powers the Analytics tab.
 - `GET /neighborhoods.geojson` — NYC neighborhood boundaries the map renders.
 - `GET /health`.
-- `POST /rescan` — wipe the database and re-scrape every borough on a background
-  thread (returns `409` if one is already running); `GET /rescan/status` reports
-  live progress (`progress`, `found`, current borough). This is the only endpoint
-  that writes — everything else is read-only. Backs the **Rescan** button.
+- `POST /rescan` — wipe the database and re-scrape **every source** (Craigslist,
+  then RentHop), each across every borough, on a background thread (returns `409`
+  if one is already running); `GET /rescan/status` reports live progress
+  (`progress`, `found`, `current_source`, current borough). This is the only
+  endpoint that writes — everything else is read-only. Backs the **Rescan** button.
 
 The API is also the contract a richer future UI (listing map pins, score
 sorting) will call.

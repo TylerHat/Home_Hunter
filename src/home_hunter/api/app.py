@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
@@ -24,8 +25,9 @@ from sqlalchemy.orm import Session
 from .. import geo, pipeline
 from ..analytics import RentalStatRow, neighborhood_rent_stats
 from ..config import load_config
-from ..db import clear_all, get_sessionmaker, init_db, make_engine
+from ..db import UpsertStats, clear_all, get_sessionmaker, init_db, make_engine
 from ..models import Rental, RentHistory, utcnow
+from ..scraper import ACTIVE_SOURCES
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +62,10 @@ def _idle_rescan_state() -> dict:
         "status": "idle",        # idle | running | done | error
         "phase": None,           # deleting | scraping | finalizing | done
         "deleted": 0,            # rows wiped before re-scraping
-        "found": 0,              # listings enriched so far (cumulative)
+        "found": 0,              # listings enriched so far (cumulative, all sources)
+        "current_source": None,  # source being pulled now (craigslist | renthop | …)
+        "sources_total": 0,      # number of sources the sweep visits
+        "sources_done": 0,       # sources fully scraped so far
         "current_area": None,
         "areas_total": 0,
         "areas_done": 0,
@@ -78,13 +83,20 @@ _rescan: dict = _idle_rescan_state()
 
 
 def _recompute_progress(state: dict) -> None:
-    """Borough-weighted fraction, smoothed within a borough by its listing count."""
-    total = state["areas_total"] or 1
+    """Source- then borough-weighted fraction for the progress bar.
+
+    Each source is an equal slice of the bar; within a source the boroughs are
+    equal slices, smoothed by the current borough's listing count.
+    """
+    sources_total = state["sources_total"] or 1
+    areas_total = state["areas_total"] or 1
     area_frac = 0.0
     if state["area_total"]:
         area_frac = min(state["area_found"] / state["area_total"], 1.0)
+    within_source = min((state["areas_done"] + area_frac) / areas_total, 1.0)
+    overall = (state["sources_done"] + within_source) / sources_total
     # Hold just below 1.0 until the run actually finishes.
-    state["progress"] = min((state["areas_done"] + area_frac) / total, 0.999)
+    state["progress"] = min(overall, 0.999)
 
 
 def _apply_rescan_event(event: dict) -> None:
@@ -111,11 +123,14 @@ def _apply_rescan_event(event: dict) -> None:
 
 
 def _run_rescan() -> None:
-    """Wipe the DB, then re-scrape, updating ``_rescan`` as progress arrives."""
+    """Wipe the DB once, then re-scrape every source in turn (Craigslist, then
+    RentHop, then any future source), updating ``_rescan`` as progress arrives."""
     try:
         config = load_config()
+        sources = list(ACTIVE_SOURCES)
         with _rescan_lock:
             _rescan["phase"] = "deleting"
+            _rescan["sources_total"] = len(sources)
             _rescan["areas_total"] = len(config.areas)
         with _Session() as session:
             deleted = clear_all(session)
@@ -124,7 +139,24 @@ def _run_rescan() -> None:
             _rescan["deleted"] = deleted
             _rescan["phase"] = "scraping"
 
-        stats = pipeline.run(config, on_progress=_apply_rescan_event)
+        total = UpsertStats()
+        for source in sources:
+            # Reset the per-source counters so the borough fraction restarts, and
+            # name the source the UI status bar shows it's pulling from.
+            with _rescan_lock:
+                _rescan["current_source"] = source
+                _rescan["phase"] = "scraping"
+                _rescan["current_area"] = None
+                _rescan["areas_done"] = 0
+                _rescan["area_total"] = None
+                _rescan["area_found"] = 0
+                _recompute_progress(_rescan)
+            total += pipeline.run(
+                replace(config, source=source), on_progress=_apply_rescan_event
+            )
+            with _rescan_lock:
+                _rescan["sources_done"] += 1
+                _recompute_progress(_rescan)
 
         with _rescan_lock:
             _rescan["status"] = "done"
@@ -132,10 +164,10 @@ def _run_rescan() -> None:
             _rescan["progress"] = 1.0
             _rescan["finished_at"] = utcnow().isoformat()
             _rescan["stats"] = {
-                "inserted": stats.inserted,
-                "updated": stats.updated,
-                "duplicates_merged": stats.duplicates_merged,
-                "price_changes": stats.price_changes,
+                "inserted": total.inserted,
+                "updated": total.updated,
+                "duplicates_merged": total.duplicates_merged,
+                "price_changes": total.price_changes,
             }
     except Exception as exc:  # surface failure to the UI rather than dying silently
         logger.exception("rescan failed")
@@ -164,6 +196,7 @@ class RentalOut(BaseModel):
     furnished: bool
     no_fee: bool
     rent_stabilized: bool
+    rent_stabilized_confirmed: bool | None
     amenities: list
     image_count: int | None
     flagged: bool
@@ -212,10 +245,11 @@ def health() -> dict[str, str]:
 
 @app.post("/rescan")
 def start_rescan() -> dict:
-    """Wipe the database and re-scrape every borough in a background thread.
+    """Wipe the database and re-scrape every source in a background thread.
 
-    Returns ``409`` if a rescan is already running. The UI then polls
-    ``GET /rescan/status`` for live progress.
+    Sweeps all wired sources in order (Craigslist, then RentHop, …), each across
+    every borough. Returns ``409`` if a rescan is already running. The UI then
+    polls ``GET /rescan/status`` for live progress (incl. the current source).
     """
     global _rescan_thread
     with _rescan_lock:

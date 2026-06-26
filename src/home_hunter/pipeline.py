@@ -14,8 +14,7 @@ from .db import (
     recompute_market_flags,
     upsert_listings,
 )
-from .scraper import build_client
-from .scraper.craigslist import RentalListing, search_area
+from .scraper import RentalListing, build_client, search_area
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +80,16 @@ def run(
                 logger.exception("area %s failed — continuing", area)
                 emit({"type": "area_done", "area": name})
                 continue
+            # Confirm rent-stabilized status from DHCR by geocoding addresses
+            # (RentHop only; a no-op for address-less sources). Best-effort: a
+            # geocoder hiccup must never abort the borough.
+            if config.rent_stab_confirm and listings:
+                try:
+                    from .rentstab.geocode import enrich_listings
+
+                    enrich_listings(listings)
+                except Exception:
+                    logger.exception("rent-stab confirmation failed for %s — continuing", name)
             if listings:
                 with Session() as session:
                     stats = upsert_listings(session, listings, config.flags)

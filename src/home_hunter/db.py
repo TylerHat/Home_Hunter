@@ -23,7 +23,8 @@ _RENTAL_FIELDS = (
     "source", "title", "neighborhood", "borough", "price", "beds", "baths",
     "sqft", "housing_type", "laundry", "parking", "cats_ok", "dogs_ok",
     "furnished", "no_smoking", "wheelchair_accessible", "air_conditioning",
-    "ev_charging", "no_fee", "rent_stabilized", "rent_period", "amenities", "image_count",
+    "ev_charging", "no_fee", "rent_stabilized", "rent_stabilized_confirmed",
+    "rent_period", "amenities", "image_count",
     "latitude", "longitude", "url", "posted_at", "updated_at",
 )
 
@@ -81,6 +82,13 @@ def _ensure_columns(engine: Engine) -> None:
             conn.execute(
                 text("ALTER TABLE rentals ADD COLUMN rent_stabilized BOOLEAN DEFAULT FALSE")
             )
+    # Authoritative DHCR confirmation. No DEFAULT: existing rows stay NULL
+    # (unknown) until a re-scrape geocodes their address.
+    if "rent_stabilized_confirmed" not in columns:
+        with engine.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE rentals ADD COLUMN rent_stabilized_confirmed BOOLEAN")
+            )
     # Index lookups used by dedup and the hide-flagged filter (idempotent; valid
     # on both SQLite and Postgres).
     with engine.begin() as conn:
@@ -92,6 +100,12 @@ def _ensure_columns(engine: Engine) -> None:
         )
         conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_rentals_rent_stabilized ON rentals (rent_stabilized)")
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_rentals_rent_stabilized_confirmed "
+                "ON rentals (rent_stabilized_confirmed)"
+            )
         )
 
 
