@@ -23,8 +23,7 @@ from dataclasses import replace  # noqa: E402
 
 from home_hunter.config import load_config  # noqa: E402
 from home_hunter.pipeline import run  # noqa: E402
-from home_hunter.scraper import build_client  # noqa: E402
-from home_hunter.scraper.craigslist import search_area  # noqa: E402
+from home_hunter.scraper import build_client, search_area  # noqa: E402
 
 
 def main() -> int:

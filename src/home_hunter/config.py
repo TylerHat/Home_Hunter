@@ -74,6 +74,10 @@ class Config:
     # Open each listing's detail page to capture sqft + amenities. Disabling
     # keeps only the cheap search-page fields (price, beds, neighborhood).
     detail_fetch: bool = True
+    # Confirm rent-stabilized status against NY DHCR's BBL list by geocoding each
+    # address-bearing listing (see home_hunter.rentstab). Only affects sources
+    # that carry a street address (RentHop); a no-op for Craigslist.
+    rent_stab_confirm: bool = True
 
     @property
     def database_url(self) -> str:
@@ -112,4 +116,5 @@ def load_config(path: str | os.PathLike[str] | None = None) -> Config:
         flags=flag_settings,
         source=str(data.get("source", "craigslist")).strip(),
         detail_fetch=bool(data.get("detail_fetch", True)),
+        rent_stab_confirm=bool(data.get("rent_stab_confirm", True)),
     )

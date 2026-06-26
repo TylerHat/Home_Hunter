@@ -27,13 +27,21 @@ filters:
   dogs_ok: null       # true = only dog-friendly listings
   max_pages: 3        # search pages per borough (~120 listings/page)
 
-# Data source. "craigslist" is the active backend; "zillow" is legacy code kept
-# under src/home_hunter/scraper/zillow/ (not wired into the default pipeline).
+# Data source. Active backends: "craigslist" and "renthop" (both plain HTTP, no
+# browser; RentHop uses curl_cffi Chrome TLS impersonation to clear Cloudflare).
+# "zillow" is legacy code under src/home_hunter/scraper/zillow/ (not wired in).
+# The same `areas` borough codes and `filters` apply to both active sources.
 source: craigslist
 
 # Open each listing's detail page to capture square footage + amenities
 # (laundry, parking, pets, no-fee). false = faster, but only search-page fields.
 detail_fetch: true
+
+# Confirm rent-stabilized status against NY DHCR's building list by geocoding each
+# address-bearing listing to a BBL (via the free NYC GeoSearch API). Only affects
+# sources that carry a street address (RentHop); a no-op for Craigslist. The UI
+# shows a solid green badge when confirmed, outline when only text-claimed.
+rent_stab_confirm: true
 
 # Scam / fake-listing heuristics. Listings are flagged (badged in the UI), never
 # dropped — use the UI "Hide suspected scams" toggle to filter them out. Photos

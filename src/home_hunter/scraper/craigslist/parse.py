@@ -115,6 +115,12 @@ class RentalListing(BaseModel):
     # True when the title/body advertises a rent-stabilized unit (a capped,
     # renewable NYC rent). Surfaced with a green marker in the UI.
     rent_stabilized: bool = False
+    # Authoritative rent-stabilized status from NY DHCR's BBL list (see
+    # home_hunter.rentstab), resolved from a listing's street address at scrape
+    # time. True/False when the address resolved; None = unknown (no street
+    # address — e.g. Craigslist — or it didn't geocode). Distinct from the
+    # text-claim above: this confirms it against the city record.
+    rent_stabilized_confirmed: bool | None = None
     rent_period: str | None = None
     amenities: list[str] = []
     # Number of photos on the detail page (0 = none; None when no detail page

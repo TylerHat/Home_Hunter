@@ -77,7 +77,8 @@
   .chip.pet { background: var(--pet); color: #f5d8a0; }
   .chip.nofee { background: var(--nofee); color: #8ff0c4; }
   .chip.scam { background: var(--scam); color: #ffb4b4; cursor: help; }
-  .chip.stable { background: var(--stable); color: #6ee7a8; border: 1px solid #2f8f5b; cursor: help; }
+  .chip.stable { background: transparent; color: #6ee7a8; border: 1px solid #2f8f5b; cursor: help; }
+  .chip.stable.confirmed { background: var(--stable); color: #eafff3; border-color: #3fae6f; }
   .foot { display: flex; justify-content: space-between; align-items: center; margin-top: auto; padding-top: 6px; }
   .posted { color: var(--muted); font-size: 12px; }
   .maplink { color: var(--accent); text-decoration: none; font-size: 12px; }
@@ -209,7 +210,7 @@
       <h1>🏙️ Home Hunter <small>— NYC apartment rentals</small></h1>
       <div class="stats" id="stats">Loading…</div>
     </div>
-    <button class="ghost" id="rescanBtn" type="button" title="Delete all listings and re-scrape Craigslist">🔄 Rescan all listings</button>
+    <button class="ghost" id="rescanBtn" type="button" title="Delete all listings and re-scrape every source (Craigslist, then RentHop)">🔄 Rescan all listings</button>
   </div>
   <div class="rescan-progress" id="rescanProgress" hidden>
     <div class="bar"><div class="fill" id="rescanFill"></div></div>
@@ -371,7 +372,7 @@ function card(r) {
                .filter(Boolean).join(" · ");
   const chips = [];
   if (r.flagged) chips.push(scamChip(r));
-  if (r.rent_stabilized) chips.push(stableChip());
+  if (r.rent_stabilized || r.rent_stabilized_confirmed === true) chips.push(stableChip(r.rent_stabilized_confirmed === true));
   if (r.no_fee) chips.push(`<span class="chip nofee">no fee</span>`);
   if (r.laundry) chips.push(`<span class="chip">${esc(r.laundry)}</span>`);
   if (r.parking) chips.push(`<span class="chip">${esc(r.parking)}</span>`);
@@ -397,8 +398,12 @@ function scamChip(r) {
 }
 
 // Green marker for a rent-stabilized listing (capped, renewable NYC rent).
-function stableChip() {
-  return `<span class="chip stable" title="Rent stabilized — capped, renewable rent">🟢 rent stabilized</span>`;
+// Solid when confirmed against NY DHCR's building list; outline when the claim
+// comes only from the listing's free text.
+function stableChip(confirmed) {
+  return confirmed
+    ? `<span class="chip stable confirmed" title="Confirmed rent-stabilized — building is in NY DHCR's registered list">🟢 rent stabilized ✓</span>`
+    : `<span class="chip stable" title="Advertised rent-stabilized — not confirmed against DHCR">🟢 rent stabilized</span>`;
 }
 
 function esc(s) {
@@ -442,8 +447,9 @@ function tableRow(r) {
   const warn = r.flagged
     ? `<span class="chip scam" title="Possible scam — ${esc((r.flag_reasons || []).join(", ") || "suspicious")}">⚠</span> `
     : "";
-  const stable = r.rent_stabilized
-    ? `<span class="chip stable" title="Rent stabilized — capped, renewable rent">🟢</span> `
+  const stableConfirmed = r.rent_stabilized_confirmed === true;
+  const stable = (r.rent_stabilized || stableConfirmed)
+    ? `<span class="chip stable${stableConfirmed ? " confirmed" : ""}" title="${stableConfirmed ? "Confirmed rent-stabilized — in NY DHCR's registered list" : "Advertised rent-stabilized — not confirmed against DHCR"}">🟢${stableConfirmed ? "✓" : ""}</span> `
     : "";
   const title = `${warn}${stable}<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title || "(no title)")}</a>`;
   const bedTxt = r.beds == null ? "—" : (r.beds === 0 ? "studio" : r.beds);
@@ -831,8 +837,8 @@ let rescanTimer = null;
 
 async function startRescan() {
   const ok = confirm(
-    "This deletes ALL current listings and rent history, then re-scrapes " +
-    "Craigslist (a few minutes). Continue?"
+    "This deletes ALL current listings and rent history, then re-scrapes every " +
+    "source — Craigslist, then RentHop (several minutes). Continue?"
   );
   if (!ok) return;
   $("#rescanBtn").disabled = true;
@@ -852,18 +858,35 @@ async function startRescan() {
   pollRescan();
 }
 
+// Pretty source names for the status bar (RentHop's camelCase, etc.).
+const SOURCE_LABELS = { craigslist: "Craigslist", renthop: "RentHop" };
+function sourceLabel(s) {
+  if (!s) return "";
+  return SOURCE_LABELS[s] || s.charAt(0).toUpperCase() + s.slice(1);
+}
+// "RentHop (2 of 2) — " prefix naming which source the sweep is pulling from now.
+function sourcePrefix(st) {
+  if (!st.current_source) return "";
+  const name = sourceLabel(st.current_source);
+  const of = st.sources_total > 1
+    ? ` (${Math.min((st.sources_done || 0) + 1, st.sources_total)} of ${st.sources_total})`
+    : "";
+  return `${name}${of} — `;
+}
+
 function renderRescan(st) {
   $("#rescanFill").style.width = Math.round((st.progress || 0) * 100) + "%";
+  const found = `${st.found} listing${st.found === 1 ? "" : "s"} found`;
   let label;
   if (st.phase === "deleting") {
     label = "Clearing old listings…";
   } else if (st.phase === "finalizing") {
-    label = `Finalizing — ${st.found} listing${st.found === 1 ? "" : "s"} found`;
+    label = `${sourcePrefix(st)}finalizing — ${found}`;
   } else if (st.current_area) {
-    label = `Scraping ${st.current_area} (${Math.min(st.areas_done + 1, st.areas_total)}/${st.areas_total})` +
-      ` — ${st.found} listing${st.found === 1 ? "" : "s"} found`;
+    label = `${sourcePrefix(st)}scraping ${st.current_area} ` +
+      `(${Math.min(st.areas_done + 1, st.areas_total)}/${st.areas_total}) — ${found}`;
   } else {
-    label = `${st.found} listing${st.found === 1 ? "" : "s"} found`;
+    label = `${sourcePrefix(st)}${found}`;
   }
   $("#rescanText").textContent = label;
 }
